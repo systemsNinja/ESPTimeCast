@@ -49,7 +49,8 @@ jobs:
           arduino-cli lib install "ESPAsyncWebServer"
 
       - name: Install ESP32 Platform
-        run: arduino-cli core install esp32:esp32@2.0.17
+        # UPDATED: Added Adafruit's URL so the CLI can find custom boards
+        run: arduino-cli core install esp32:esp32@2.0.17 --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
 
       - name: Compile Sketch
         run: |
@@ -88,9 +89,6 @@ jobs:
           asset_name: merged-firmware.bin
           asset_content_type: application/octet-stream
       
-      # ---
-      # NEW STEP: Upload firmware as an artifact on push events
-      # ---
       - name: Upload Build Artifact
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
