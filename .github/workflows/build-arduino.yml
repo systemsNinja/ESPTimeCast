@@ -22,6 +22,10 @@ env:
 # A workflow is made up of one or more jobs.
 jobs:
   build:
+    # Add this permissions block to grant write access to the token
+    permissions:
+      contents: write
+
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -51,7 +55,6 @@ jobs:
           $MK_TOOL_PATH -c ${{ env.SKETCH_FOLDER }}/data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
       - name: Rename Firmware File for Clarity
-        # CORRECTED FILENAME HERE
         run: mv build_output/${{ env.SKETCH_FOLDER }}.ino.bin build_output/firmware.bin
 
       - name: Setup Python
@@ -63,7 +66,6 @@ jobs:
         run: pip install esptool
 
       - name: Merge Binaries
-        # CORRECTED FILENAMES HERE
         run: |
           esptool.py --chip ${{ env.ESP_CHIP_TYPE }} merge_bin -o merged-firmware.bin \
           ${{ env.ADDR_BOOTLOADER }} build_output/${{ env.SKETCH_FOLDER }}.ino.bootloader.bin \
