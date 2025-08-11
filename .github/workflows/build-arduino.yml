@@ -1,0 +1,83 @@
+# Name of the GitHub Actions workflow.
+name: Build Arduino Firmware
+
+# This workflow is triggered automatically when a new Release is created
+# or can be run manually from the Actions tab.
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+# Environment variables for easy configuration.
+env:
+  # Your sketch name
+  SKETCH_NAME: ESPTimeCast_ESP32.ino
+  
+  # FQBN for the Adafruit ESP32-S3 Feather.
+  # NOTE: This is an educated guess. If your board is different (like a QT Py or another model),
+  # you will need to find the exact FQBN for it. This is a common point of failure.
+  # You can often find this in the board's documentation or by running 'arduino-cli board listall'.
+  BOARD_FQBN: esp32:esp32:adafruit_feather_esp32s3
+
+# A workflow is made up of one or more jobs.
+jobs:
+  build:
+    # The type of virtual machine to run the job on.
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job.
+    steps:
+      # ---
+      # STEP 1: Check out your repository's code
+      # ---
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ---
+      # STEP 2: Set up the Arduino CLI environment
+      # ---
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      # ---
+      # STEP 3: Install required libraries
+      # ---
+      - name: Install Libraries
+        run: |
+          arduino-cli lib install "ArduinoJson"
+          arduino-cli lib install "MD_Parola"
+          arduino-cli lib install "MD_MAX72xx"
+          arduino-cli lib install "AsyncTCP"
+          arduino-cli lib install "ESPAsyncWebServer"
+          # Note: Core libraries like WiFi, HTTPClient, SPI, etc., are included with the board package.
+
+      # ---
+      # STEP 4: Install the ESP32 board package
+      # ---
+      - name: Install ESP32 Platform
+        run: arduino-cli core install esp32:esp32
+
+      # ---
+      # STEP 5: Compile the Arduino sketch
+      # ---
+      - name: Compile Sketch
+        run: |
+          arduino-cli compile --fqbn ${{ env.BOARD_FQBN }} --output-dir build_output ${{ env.SKETCH_NAME }}
+
+      # ---
+      # STEP 6: Rename the .bin file for consistency
+      # ---
+      - name: Rename Firmware File
+        run: mv build_output/${{ env.SKETCH_NAME }}.bin build_output/firmware.bin
+
+      # ---
+      # STEP 7: Upload the compiled .bin file to the Release
+      # ---
+      - name: Upload Firmware to Release
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./build_output/firmware.bin
+          asset_name: firmware.bin
+          asset_content_type: application/octet-stream
