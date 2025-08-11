@@ -47,7 +47,7 @@ jobs:
           arduino-cli lib install "ESPAsyncWebServer"
 
       - name: Install ESP32 Platform
-        run: arduino-cli core install esp32:esp32
+        run: arduino-cli core install esp32:esp32@2.0.17
 
       - name: Compile Sketch
         run: |
