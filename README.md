@@ -1,19 +1,28 @@
 ![ESPTimeCast](assets/logo.svg)
 
-![GitHub stars](https://img.shields.io/github/stars/mfactory-osaka/ESPTimeCast?style=social)
-![GitHub forks](https://img.shields.io/github/forks/mfactory-osaka/ESPTimeCast?style=social)
-![Last Commit](https://img.shields.io/github/last-commit/mfactory-osaka/ESPTimeCast)
+![GitHub stars](https://img.shields.io/github/stars/systemsNinja/ESPTimeCast?style=social)
+![GitHub forks](https://img.shields.io/github/forks/systemsNinja/ESPTimeCast?style=social)
+![Last Commit](https://img.shields.io/github/last-commit/systemsNinja/ESPTimeCast)
 
-**ESPTimeCast** is a WiFi-connected LED matrix clock and weather station based on ESP8266 and MAX7219.  
-It displays the current time, day of the week, and local weather (temp/humidity/weather description) fetched from OpenWeatherMap.  
+**ESPTimeCast Advanced** is a WiFi-connected LED matrix display based on ESP32 and Max7219. It is forked from  [mfactory-osaka]((https://github.com/mfactory-osaka/ESPTimeCast) and upgraded with a few advanced features.  
+It displays the current time, day of the week, and local weather (temp/humidity/weather description) fetched from OpenWeatherMap, countdown timer, and effects display. Optionally you can also enable glucose + trend display (Nightscout-compatible). 
 Setup and configuration are fully managed via a built-in web interface.  
+
+Fundamental changes from the original creator:
+1. Added 'Scheduler' to the countdown 
+2. Changed the format of the countdown message to be easier to see
+3. Added a configurable number of times the countdown message scrolls across.
+4. Added 5 fun effects to the rotation with high degree of customizability. They too have a scheduler capability.
+5. Added Custom ESP Pins to the web UI. Define your ESP pins right in the UI
+
+The reason for the scheduler is that in the early mornings, evenings and at night, I mostly just want the time and weather.
 
 ![clock - weather](assets/demo.gif) 
 
 
 ## 📦 3D Printable Case
 
-Want to give your ESPTimeCast a home? You can 3D print a custom case for it!
+If you want a case for your creation you can purchase the 3D print case files from the original creator!
 
 <img src="assets/image01.png" alt="3D Printable Case" width="320" />
 
@@ -34,6 +43,25 @@ Want to give your ESPTimeCast a home? You can 3D print a custom case for it!
 - **Week Day and Weather Description display** in multiple languages
 - **Persistent Config** stored in LittleFS, with backup/restore system
 - **Status Animations** for WiFi connection, AP mode, time syncing.
+- **Dramatic Countdown** function
+  - **NEW** Scroll count
+  - **NEW** Countdown Schedule - will turn on the countdown during this set schedule. If this is turned off it will show all the time.
+- Optional **glucose + trend** display (Nightscout-compatible)
+- **ALL NEW Fun Effects** 
+  - **Effects schedule** will turn on the effects during this set schedule. If this is turned off it will show all the time.
+  - Effect order can be changed by dragging and dropping
+  - Effects:
+	  - EKG (heat beat)
+	    - Settings: Duration and Speed
+	  - Matrix Effect
+	    - Settings: Duration and Matrix Load (increase/decrease the rain)
+	  - Ping Pong Effect
+	    - Settings: Duration
+	  - Snake
+	    - Settings: Duration
+	  - Knight Rider
+	    - Settings: Duration, Scanner width, Scanner Speed
+
 - **Advanced Settings** panel with:
   - Custom **Primary/Secondary NTP server** input
   - Display **Day of the Week** toggle (default is on)
@@ -45,54 +73,25 @@ Want to give your ESPTimeCast a home? You can 3D print a custom case for it!
   - **Flip display** (180 degrees)
   - Adjustable display **brightness**
   - Dimming Hours **Scheduling**
-  - Dramatic **Countdown** function
-  - Optional **glucose + trend** display (Nightscout-compatible, set via ntpserver2)
+  - **NEW Custom ESP Pins** Define your pins right in the UI
+  
     
 ---
 
 ## 🪛 Wiring
 
 
-
-**Power Supply Change** Switching from 3.3V to 5V for Display
-
- Note: although the pins are labeled differently in the V4 and the S2, the positions are the same as the V3.x
-
-**Wemos D1 Mini (ESP8266) → MAX7219**  
 **Wemos S2 Mini (ESP32) → MAX7219**
 
-| Wemos D1 Mini (v3.x) | Wemos D1 Mini (v4.0) | Wemos S2 Mini | MAX7219 |
-|:------:|:------:|:------:|:------|
-|  GND  |  GND  |  GND  |   GND  |
-|  D6   |  12  |  9  |   CLK  |
-|  D7   |  13  |  11  |   CS   |
-|  D8   |  15  |  12  |   DIN  |
-|  5V  |  5V  |  5V  |   VCC  | 
+| Wemos S2 Mini | MAX7219 |
+| :-----------: | :-----: |
+|      GND      |   GND   |
+|       9       |   CLK   |
+|      11       |   CS    |
+|      12       |   DIN   |
+|      5V       |   VCC   |
 
 <img src="assets/wiring2.png" alt="Wiring" width="800" />
-
-**Important hardware update:**  
-After observing overheating issues and unstable behavior when powering the MAX7219 matrix from the Mini D1’s 3.3V pin, we’re officially switching to powering the display via the 5V USB rail instead.  
-
-**What’s changing:**
-- Before: Display VCC was connected to 3.3V pin on the ESP board.
-- Now: Display VCC will be connected to the board’s 5V pin (which comes directly from USB power).
-  
-**Why this change is needed:**
-- The MAX7219 LED matrix is designed for 5V operation.  
-- The onboard 3.3V regulator (usually an AMS1117) on the Mini D1 is very limited in current output (~800mA max, often much less in practice).  
-- High-brightness matrix modules — especially green/yellow displays — can draw enough current to overload the regulator, causing:
-  - Overheating
-  - Voltage drop
-  - Complete regulator failure (some users reported only 2.4V output after damage)
-
-**Benefits of using 5V:**
-- Higher brightness and more stable matrix performance
-- Reduced heat load on the ESP8266 board
-- Avoid long-term damage to the onboard regulator
-- The MAX7219 works fine with 3.3V logic signals from the ESP (no need for level shifters)
-
-Note: Thanks to @Wood578Guy for the info on V4
 
 ---
 
@@ -105,26 +104,48 @@ The built-in web interface provides full configuration for:
 - **Time zone** (will auto-populate if TZ is found)
 - **Day of the Week and Weather Description** languages
 - **Display durations** for clock and weather (milliseconds)
+- **Dramatic Countdown** function
+  - **NEW** Scroll count
+  - **NEW** Countdown Schedule - will turn on the countdown during this set schedule. If this is turned off it will show all the time.
+- Optional **glucose + trend** display (Nightscout-compatible)
+- **ALL NEW Fun Effects**  (see below)
 - **Advanced Settings** (see below)
 
 ### First-time Setup / AP Mode
 
-1. Power on the device. If WiFi fails, it auto-starts in AP mode:
+6. Power on the device. If WiFi fails, it auto-starts in AP mode:
    - **SSID:** `ESPTimeCast`
    - **Password:** `12345678`
    - Open `http://192.168.4.1` or `http://setup.esp` in your browser.
-2. Set your WiFi and all other options.
-3. Click **Save Setting** – the device saves config, reboots, and connects.
-4. The device shows its local IP address after boot so you can login again for setting changes
+7. Set your WiFi and all other options.
+8. Click **Save Setting** – the device saves config, reboots, and connects.
+9. The device shows its local IP address after boot so you can login again for setting changes
 
 *External links and the "Get My Location" button require internet access.  
 They won't work while the device is in AP Mode - connect to Wi-Fi first.
 
 ### UI Example:
-<img src="assets/webui6.png" alt="Web Interface" width="320">
+<img src="assets/webui1.png" alt="Web Interface" width="320"><img src="assets/webui2.png" alt="Web Interface" width="320"> <img src="assets/webui3.png" alt="Web Interface" width="320"> <img src="assets/webui4.png" alt="Web Interface" width="320">
+
+
 
 ---
+## Fun Effects
 
+Click the **Fun Effects** in the web UI to reveal configuration options.  
+***DRAG AND DROP*** effects to change the order of which shows first
+
+  - **Effects schedule** will turn on the effects during this set schedule. If this is turned off it will show all the time.
+  - EKG (heat beat)
+	  - Settings: Duration and Speed
+  - Matrix Effect
+	  - Settings: Duration and Matrix Load (increase/decrease the rain)
+  - Ping Pong Effect
+	  - Settings: Duration
+  - Snake
+	  - Settings: Duration
+  - Knight Rider
+	  - Settings: Duration, Scanner width, Scanner Speed
 ## ⚙️ Advanced Settings
 
 Click the **cog icon** next to “Advanced Settings” in the web UI to reveal extra configuration options.  
@@ -142,7 +163,7 @@ Click the **cog icon** next to “Advanced Settings” in the web UI to reveal e
 - **Flip Display**: Invert the display vertically/horizontally
 - **Brightness**: 0 (dim) to 15 (bright)
 - **Dimming Feature**: Start time, end time and desired brightness selection
-- **Dramatic Countdown** function, set a countdown to your favorit/next event! 
+- **NEW Custom ESP Pins** Define your pins right in the UI
 
 *Non-English characters converted to their closest English alphabet.  
 Tip: Don't forget to press the save button to keep your settings
@@ -168,38 +189,18 @@ This guide will walk you through setting up your environment and uploading the *
 
 ---
 
-### ⚙️ ESP8266 Setup
-
-Follow these steps to prepare your Arduino IDE for ESP8266 development:
-
-1.  **Install ESP8266 Board Package:**
-    * Open `File > Preferences` in Arduino IDE.
-    * Add `http://arduino.esp8266.com/stable/package_esp8266com_index.json` to "Additional Boards Manager URLs."
-    * Go to `Tools > Board > Boards Manager...`. Search for `esp8266` by `ESP8266 Community` and click "Install".
-2.  **Select Your Board:**
-    * Go to `Tools > Board` and select your specific board, e.g., **Wemos D1 Mini** (or your ESP8266 variant).
-3.  **Configure Flash Size:**
-    * Under `Tools`, select `Flash Size "4MB FS:2MB OTA:~1019KB"`. This ensures enough space for the sketch and LittleFS data.
-4.  **Install Libraries:**
-    * Go to `Sketch > Include Library > Manage Libraries...` and install the following:
-        * `ArduinoJson` by Benoit Blanchon
-        * `MD_Parola` by majicDesigns (this will typically also install its dependency: `MD_MAX72xx`)
-        * `ESPAsyncTCP` by ESP32Async
-        * `ESPAsyncWebServer` by ESP32Async
-
----
 
 ### ⚙️ ESP32 Setup
 
 Follow these steps to prepare your Arduino IDE for ESP32 development:
 
-1.  **Install ESP32 Board Package:**
+10.  **Install ESP32 Board Package:**
     * Go to `Tools > Board > Boards Manager...`. Search for `esp32` by `Espressif Systems` and click "Install".
-2.  **Select Your Board:**
+11.  **Select Your Board:**
     * Go to `Tools > Board` and select your specific board, e.g., **LOLIN S2 Mini** (or your ESP32 variant).
-3.  **Configure Partition Scheme:**
+12.  **Configure Partition Scheme:**
     * Under `Tools`, select `Partition Scheme "Default 4MB with spiffs"`. This ensures enough space for the sketch and LittleFS data.
-4.  **Install Libraries:**
+13.  **Install Libraries:**
     * Go to `Sketch > Include Library > Manage Libraries...` and install the following:
         * `ArduinoJson` by Benoit Blanchon
         * `MD_Parola` by majicDesigns (this will typically also install its dependency: `MD_MAX72xx`)
@@ -212,12 +213,11 @@ Follow these steps to prepare your Arduino IDE for ESP32 development:
 
 Once your Arduino IDE is set up for your board (as described above):
 
-1.  **Open the Project Folder:**
-    * For ESP8266: Navigate to and open the `ESPTimceCast_ESP8266` project folder. Inside, you'll find the main sketch file, typically named `ESPTimceCast_ESP8266.ino`. Open this `.ino` file in the Arduino IDE.
+14.  **Open the Project Folder:**
     * For ESP32: Navigate to and open the `ESPTimceCast_ESP32` project folder. Inside, you'll find the main sketch file, typically named `ESPTimceCast_ESP32.ino`. Open this `.ino` file in the Arduino IDE.
-2. **Upload the Sketch:**
+15. **Upload the Sketch:**
     * With the main sketch file open, click the "Upload" button (the right arrow icon) in the Arduino IDE toolbar. This will compile the entire project and upload it to your board.
-3.  **Upload `/data` folder (LittleFS):**
+16.  **Upload `/data` folder (LittleFS):**
     * This project uses LittleFS for storing web interface files and other assets. You'll need the LittleFS Uploader plugin.
     * [**Install the LittleFS Uploader Plugin**](https://randomnerdtutorials.com/arduino-ide-2-install-esp8266-littlefs/) 
     * **Before uploading, ensure the Serial Monitor is closed.**
@@ -236,14 +236,20 @@ If "Show Weather Description" is enabled a third mode (Description) will display
 What you see on the LED matrix depends on whether the device has successfully fetched the current time (via NTP) and weather (via OpenWeatherMap).  
 The following table summarizes what will appear on the display in each scenario:
 
-| Display Mode | 🕒 NTP Time | 🌦️ Weather Data | 📺 Display Output                              |
-|:------------:|:----------:|:--------------:|:--------------------------------------------|
-| **Clock**    | ✅ Yes      | —              | 🗓️ Day Icon + ⏰ Time (e.g. `@ 14:53`)           |
-| **Clock**    | ❌ No       | —              |  `! NTP` (NTP sync failed)               |
-| **Weather**  | —          | ✅ Yes         | 🌡️ Temperature (e.g. `23ºC`)                |
-| **Weather**  | ✅ Yes      | ❌ No          | 🗓️ Day Icon + ⏰ Time (e.g. `@ 14:53`)           |
-| **Weather**  | ❌ No       | ❌ No          |  `! TEMP` (no weather or time data)       |
-
+| Display Mode | 🕒 NTP Time | 🌦️ Weather Data | 📺 Display Output                      |
+| :----------: | :---------: | :--------------: | :------------------------------------- |
+|  **Clock**   |    ✅ Yes    |        —         | 🗓️ Day Icon + ⏰ Time (e.g. `@ 14:53`) |
+|  **Clock**   |    ❌ No     |        —         | `! NTP` (NTP sync failed)              |
+| **Weather**  |      —      |      ✅ Yes       | 🌡️ Temperature (e.g. `23ºC`)          |
+| **Weather**  |    ✅ Yes    |       ❌ No       | 🗓️ Day Icon + ⏰ Time (e.g. `@ 14:53`) |
+| **Weather**  |    ❌ No     |       ❌ No       | `! TEMP` (no weather or time data)     |
+**Legend:**
+- 🗓️ **Day Icon**: Custom symbol for day of week (`@`, `=`, etc.)
+- ⏰ **Time**: Current time (HH:MM)
+- 🌡️ **Temperature**: Weather from OpenWeatherMap
+- ✅ **Yes**: Data available
+- ❌ **No**: Data not available
+- — : Value does not affect this mode
 ### **How it works:**
 
 - The display automatically alternates between **Clock** and **Weather** modes (the duration for each is configurable).
@@ -252,13 +258,19 @@ The following table summarizes what will appear on the display in each scenario:
 - In **Weather** mode, if weather is available, you’ll see the temperature (like `23ºC`). If weather is not available but time is, it falls back to showing the clock. If neither is available, you’ll see `! TEMP`.
 - All status/error messages (`! NTP`, `! TEMP`) are big icons shown on the display.
 
-**Legend:**
-- 🗓️ **Day Icon**: Custom symbol for day of week (`@`, `=`, etc.)
-- ⏰ **Time**: Current time (HH:MM)
-- 🌡️ **Temperature**: Weather from OpenWeatherMap
-- ✅ **Yes**: Data available
-- ❌ **No**: Data not available
-- — : Value does not affect this mode
+#### Countdown, Glucose and Effects ####
+
+- If Countdown is turned on (and within scheduled times if on), it always shows AFTER weather if configured, or after the time if weather not configured
+- If Glucose is configured  it will show AFTER the countdown in the rotation
+- If Effects are configured they will show after the Glucose display
+	- Effects have their own custom order. Drag and drop the effects to change the order
+
+
+# Display order #
+### Time -> Weather -> Countdown -> Glucose -> Effects ###
+
+
+
 
 ---
 
@@ -266,8 +278,8 @@ The following table summarizes what will appear on the display in each scenario:
 
 If you enjoy this project, please consider supporting my work:
 
-[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.me/officialuphoto)
-[![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-fafbfc?logo=github&logoColor=ea4aaa)](https://github.com/sponsors/mfactory-osaka) 
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.me/MarcinKollek)
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-fafbfc?logo=github&logoColor=ea4aaa)](https://github.com/sponsors/systemsNinja)
 
 
 

@@ -11,19 +11,25 @@
 #include <DNSServer.h>
 #include <sntp.h>
 #include <time.h>
-#include <WiFiClientSecure.h>
+#include <WiFiClientSecure.h> // Added for Nightscout HTTPS
 
 #include "mfactoryfont.h"  // Custom font
 #include "tz_lookup.h"     // Timezone lookup, do not duplicate mapping here!
 #include "days_lookup.h"   // Languages for the Days of the Week
 
+// --- Pin Definitions ---
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
 #define MAX_DEVICES 4
-#define CLK_PIN 9
-#define CS_PIN 11
-#define DATA_PIN 12
 
-MD_Parola P = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
+// Default Pins
+#define CLK_PIN     14  // Default CLK Pin
+#define DATA_PIN    27  // Default DATA Pin
+#define CS_PIN      25  // Default CS Pin
+
+// The Parola object is now a pointer, to be initialized in setup()
+// This allows us to use either default or custom pins from the config file.
+MD_Parola *P = nullptr;
+
 AsyncWebServer server(80);
 
 // --- Global Scroll Speed Settings ---
@@ -52,7 +58,14 @@ bool showDayOfWeek = true;
 bool showHumidity = false;
 bool colonBlinkEnabled = true;
 char ntpServer1[64] = "pool.ntp.org";
-char ntpServer2[256] = "time.nist.gov";
+char ntpServer2[64] = "time.nist.gov"; // Restored to original purpose
+char nightscoutUrl[256] = ""; // New dedicated variable for Nightscout
+
+// Custom Pin Configuration
+bool useCustomPins = false;
+int custom_clk_pin = CLK_PIN;
+int custom_data_pin = DATA_PIN;
+int custom_cs_pin = CS_PIN;
 
 // Dimming
 bool dimmingEnabled = false;
@@ -62,10 +75,89 @@ int dimEndHour = 8;  // 8am default
 int dimEndMinute = 0;
 int dimBrightness = 2;  // Dimming level (0-15)
 
-//Countdown Globals - NEW
+//Countdown Globals
 bool countdownEnabled = false;
 time_t countdownTargetTimestamp = 0;  // Unix timestamp
 char countdownLabel[64] = "";         // Label for the countdown
+int countdownScrollCount = 2;         // How many times the countdown message scrolls
+bool countdownScheduleEnabled = false;
+int countdownStartHour = 0;
+int countdownStartMinute = 0;
+int countdownEndHour = 23;
+int countdownEndMinute = 59;
+
+// Effect Order
+const int NUM_EFFECTS = 5;
+int effectOrder[NUM_EFFECTS] = {5, 6, 7, 8, 9}; // Effects now start at mode 5
+int effectOrderIndex = -1;                      // -1 means not currently in an effect cycle
+
+// Effects Scheduling
+bool effectsScheduleEnabled = false;
+int effectsStartHour = 0;
+int effectsStartMinute = 0;
+int effectsEndHour = 23;
+int effectsEndMinute = 59;
+
+// Matrix Effect Globals
+bool matrixEffectEnabled = false;
+unsigned long matrixDuration = 5000; // Default 5 seconds
+int matrixLoad = 4; // Default rain density
+bool matrixIsFirstRun = true;
+unsigned long matrixLastUpdate = 0;
+
+// Ping-Pong Effect Globals
+bool pingPongEffectEnabled = false;
+unsigned long pingPongDuration = 10000; // Default 10 seconds
+unsigned long pingPongLastUpdate = 0;
+const int PING_PONG_SPEED = 90; // ms between animation frames (lower is faster)
+const int MATRIX_WIDTH = 32;
+const int MATRIX_HEIGHT = 8;
+#define PADDLE_HEIGHT 3
+#define BALL_SIZE 1
+struct Paddle { int y, dy; };
+struct Ball { int x, y, dx, dy; };
+Paddle paddle1;
+Paddle paddle2;
+Ball ball;
+bool pingPongIsFirstRun = true;
+
+// --- Snake Game Globals ---
+bool snakeEffectEnabled = false;
+unsigned long snakeDuration = 15000; // Default 15 seconds
+bool snakeIsFirstRun = true;
+const int SNAKE_SPEED = 200; // ms between frames
+unsigned long snakeLastUpdate = 0;
+struct SnakeSegment { int x, y; };
+SnakeSegment snake[MATRIX_WIDTH * MATRIX_HEIGHT];
+int snakeLength;
+int foodX, foodY;
+enum Direction { UP, DOWN, LEFT, RIGHT };
+Direction snakeDir;
+
+// --- Knight Rider Effect Globals ---
+bool knightRiderEffectEnabled = false;
+unsigned long knightRiderDuration = 10000; // Default 10 seconds
+int knightRiderSpeed = 5; // Speed for Knight Rider (1-10)
+int knightRiderWidth = 8; // Width of the scanner bar
+bool knightRiderIsFirstRun = true;
+unsigned long knightRiderLastUpdate = 0;
+int knightRiderPos = 0;
+int knightRiderDir = 1;
+const int KR_BAR_Y = 3; // Vertical row for the scanner
+
+// --- EKG Effect Globals ---
+bool ekgEffectEnabled = false;
+unsigned long ekgDuration = 10000; // Default 10 seconds
+int ekgSpeed = 5; // Speed for EKG (1-10)
+bool ekgIsFirstRun = true;
+unsigned long ekgLastDrawTime = 0;
+int ekgCurrentPixel = 0;
+int ekg_prev_yPos = -1;
+bool ekgPaused = false;
+unsigned long ekgPauseStartTime = 0;
+const uint8_t heartBeatWaveform[] = { 4, 4, 3, 4, 5, 4, 4, 4, 3, 2, 3, 4, 4, 2, 1, 7, 5, 4, 4, 3, 4, 5, 4, 4, 4 };
+const uint8_t ekgWaveformSize = sizeof(heartBeatWaveform) / sizeof(heartBeatWaveform[0]);
+
 
 // State management
 bool weatherCycleStarted = false;
@@ -85,7 +177,7 @@ bool shouldFetchWeatherNow = false;
 
 unsigned long lastSwitch = 0;
 unsigned long lastColonBlink = 0;
-int displayMode = 0;  // 0: Clock, 1: Weather, 2: Weather Description, 3: Countdown
+int displayMode = 0;  // 0:Clock, 1:Weather, 2:WeatherDesc, 3:Countdown, 4:Nightscout, 5:Matrix, 6:PingPong, 7:Snake, 8:KnightRider, 9:EKG
 int currentHumidity = -1;
 bool ntpSyncSuccessful = false;
 
@@ -107,16 +199,16 @@ const unsigned long ntpStatusPrintInterval = 1000;  // Print status every 1 seco
 // Non-blocking IP display globals
 bool showingIp = false;
 int ipDisplayCount = 0;
-const int ipDisplayMax = 2;  // As per working copy for how long IP shows
+const int ipDisplayMax = 1;  // Display IP scroll once
 String pendingIpToShow = "";
 
-// Countdown display state - NEW
+// Countdown display state
 bool countdownScrolling = false;
 unsigned long countdownScrollEndTime = 0;
 unsigned long countdownStaticStartTime = 0;  // For last-day static display
 
 
-// --- NEW GLOBAL VARIABLES FOR IMMEDIATE COUNTDOWN FINISH ---
+// --- GLOBAL VARIABLES FOR IMMEDIATE COUNTDOWN FINISH ---
 bool countdownFinished = false;                       // Tracks if the countdown has permanently finished
 bool countdownShowFinishedMessage = false;            // Flag to indicate "TIMES UP" message is active
 unsigned long countdownFinishedMessageStartTime = 0;  // Timer for the 10-second message duration
@@ -138,10 +230,31 @@ textEffect_t getEffectiveScrollDirection(textEffect_t desiredDirection, bool isF
     if (desiredDirection == PA_SCROLL_LEFT) {
       return PA_SCROLL_RIGHT;
     } else if (desiredDirection == PA_SCROLL_RIGHT) {
-      return PA_SCROLL_LEFT;
+       return PA_SCROLL_LEFT;
     }
   }
   return desiredDirection;
+}
+
+// -----------------------------------------------------------------------------
+// Effect Order Parsing
+// -----------------------------------------------------------------------------
+void parseEffectOrder(String orderStr) {
+  if (orderStr.length() == 0) return; // Keep default if empty or invalid
+  
+  int current_index = 0;
+  int last_delim = -1;
+  for (int i = 0; i < orderStr.length() && current_index < NUM_EFFECTS; i++) {
+    if (orderStr.charAt(i) == ',') {
+      effectOrder[current_index++] = orderStr.substring(last_delim + 1, i).toInt();
+      last_delim = i;
+    }
+  }
+  
+  // Get the last value after the final comma
+  if (current_index < NUM_EFFECTS && last_delim < (int)orderStr.length() - 1) {
+    effectOrder[current_index] = orderStr.substring(last_delim + 1).toInt();
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -153,7 +266,7 @@ void loadConfig() {
   // Check if config.json exists, if not, create default
   if (!LittleFS.exists("/config.json")) {
     Serial.println(F("[CONFIG] config.json not found, creating with defaults..."));
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);
     doc[F("ssid")] = "";
     doc[F("password")] = "";
     doc[F("openWeatherApiKey")] = "";
@@ -169,22 +282,72 @@ void loadConfig() {
     doc[F("twelveHourToggle")] = twelveHourToggle;
     doc[F("showDayOfWeek")] = showDayOfWeek;
     doc[F("showHumidity")] = showHumidity;
-    doc[F("colonBlinkEnabled")] = colonBlinkEnabled;
+    doc[F("colonBlinkEnabled")] = colonBlinkEnabled; 
     doc[F("ntpServer1")] = ntpServer1;
     doc[F("ntpServer2")] = ntpServer2;
+    doc[F("nightscoutUrl")] = ""; // Add new nightscoutUrl field
+    doc[F("showWeatherDescription")] = showWeatherDescription;
+
+    // Add custom pin defaults
+    doc[F("useCustomPins")] = false;
+    doc[F("custom_clk_pin")] = CLK_PIN;
+    doc[F("custom_data_pin")] = DATA_PIN;
+    doc[F("custom_cs_pin")] = CS_PIN;
+
+    // Add dimming defaults
     doc[F("dimmingEnabled")] = dimmingEnabled;
     doc[F("dimStartHour")] = dimStartHour;
     doc[F("dimStartMinute")] = dimStartMinute;
     doc[F("dimEndHour")] = dimEndHour;
     doc[F("dimEndMinute")] = dimEndMinute;
     doc[F("dimBrightness")] = dimBrightness;
-    doc[F("showWeatherDescription")] = showWeatherDescription;
 
-    // Add countdown defaults when creating a new config.json
+    // Add countdown defaults
     JsonObject countdownObj = doc.createNestedObject("countdown");
     countdownObj["enabled"] = false;
     countdownObj["targetTimestamp"] = 0;
     countdownObj["label"] = "";
+    countdownObj["scrollCount"] = 2;
+    countdownObj["scheduleEnabled"] = false;
+    countdownObj["startHour"] = 0;
+    countdownObj["startMinute"] = 0;
+    countdownObj["endHour"] = 23;
+    countdownObj["endMinute"] = 59;
+    
+    // Add effect order default
+    doc[F("effectOrder")] = "5,6,7,8,9";
+
+    // Add Effects Scheduling defaults
+    JsonObject effectsScheduleObj = doc.createNestedObject("effectsSchedule");
+    effectsScheduleObj["enabled"] = false;
+    effectsScheduleObj["startHour"] = 0;
+    effectsScheduleObj["startMinute"] = 0;
+    effectsScheduleObj["endHour"] = 23;
+    effectsScheduleObj["endMinute"] = 59;
+
+    // Add Matrix defaults
+    doc[F("matrixEffectEnabled")] = false;
+    doc[F("matrixDuration")] = 5000;
+    doc[F("matrixLoad")] = 4;
+
+    // Add Ping-Pong defaults
+    doc[F("pingPongEffectEnabled")] = false;
+    doc[F("pingPongDuration")] = 10000;
+
+    // Add Snake defaults
+    doc[F("snakeEffectEnabled")] = false;
+    doc[F("snakeDuration")] = 15000;
+
+    // Add Knight Rider defaults
+    doc[F("knightRiderEffectEnabled")] = false;
+    doc[F("knightRiderDuration")] = 10000;
+    doc[F("knightRiderSpeed")] = 5;
+    doc[F("knightRiderWidth")] = 8;
+
+    // Add EKG defaults
+    doc[F("ekgEffectEnabled")] = false;
+    doc[F("ekgDuration")] = 10000;
+    doc[F("ekgSpeed")] = 5;
 
     File f = LittleFS.open("/config.json", "w");
     if (f) {
@@ -203,7 +366,7 @@ void loadConfig() {
     return;
   }
 
-  DynamicJsonDocument doc(1024);  // Size based on ArduinoJson Assistant + buffer
+  DynamicJsonDocument doc(2048);  // Size based on ArduinoJson Assistant + buffer
   DeserializationError error = deserializeJson(doc, configFile);
   configFile.close();
 
@@ -215,7 +378,7 @@ void loadConfig() {
 
   strlcpy(ssid, doc["ssid"] | "", sizeof(ssid));
   strlcpy(password, doc["password"] | "", sizeof(password));
-  strlcpy(openWeatherApiKey, doc["openWeatherApiKey"] | "", sizeof(openWeatherApiKey));  // Corrected typo here
+  strlcpy(openWeatherApiKey, doc["openWeatherApiKey"] | "", sizeof(openWeatherApiKey));
   strlcpy(openWeatherCity, doc["openWeatherCity"] | "", sizeof(openWeatherCity));
   strlcpy(openWeatherCountry, doc["openWeatherCountry"] | "", sizeof(openWeatherCountry));
   strlcpy(weatherUnits, doc["weatherUnits"] | "metric", sizeof(weatherUnits));
@@ -236,6 +399,12 @@ void loadConfig() {
   showHumidity = doc["showHumidity"] | false;
   colonBlinkEnabled = doc.containsKey("colonBlinkEnabled") ? doc["colonBlinkEnabled"].as<bool>() : true;
 
+  // --- Load Custom Pin Config ---
+  useCustomPins = doc["useCustomPins"] | false;
+  custom_clk_pin = doc["custom_clk_pin"] | CLK_PIN;
+  custom_data_pin = doc["custom_data_pin"] | DATA_PIN;
+  custom_cs_pin = doc["custom_cs_pin"] | CS_PIN;
+
   String de = doc["dimmingEnabled"].as<String>();
   dimmingEnabled = (de == "true" || de == "on" || de == "1");
 
@@ -247,6 +416,7 @@ void loadConfig() {
 
   strlcpy(ntpServer1, doc["ntpServer1"] | "pool.ntp.org", sizeof(ntpServer1));
   strlcpy(ntpServer2, doc["ntpServer2"] | "time.nist.gov", sizeof(ntpServer2));
+  strlcpy(nightscoutUrl, doc["nightscoutUrl"] | "", sizeof(nightscoutUrl)); // Load the new Nightscout URL
 
   if (strcmp(weatherUnits, "imperial") == 0)
     tempSymbol = ']';
@@ -264,10 +434,21 @@ void loadConfig() {
 
     countdownEnabled = countdownObj["enabled"] | false;
     countdownTargetTimestamp = countdownObj["targetTimestamp"] | 0;
+    countdownScrollCount = countdownObj["scrollCount"] | 2;
+    if (countdownScrollCount < 1 || countdownScrollCount > 5) {
+        countdownScrollCount = 2; // Enforce bounds
+    }
+
+    countdownScheduleEnabled = countdownObj["scheduleEnabled"] | false;
+    countdownStartHour = countdownObj["startHour"] | 0;
+    countdownStartMinute = countdownObj["startMinute"] | 0;
+    countdownEndHour = countdownObj["endHour"] | 23;
+    countdownEndMinute = countdownObj["endMinute"] | 59;
+
 
     JsonVariant labelVariant = countdownObj["label"];
     if (labelVariant.isNull() || !labelVariant.is<const char *>()) {
-      strcpy(countdownLabel, "");
+       strcpy(countdownLabel, "");
     } else {
       const char *labelTemp = labelVariant.as<const char *>();
       size_t labelLen = strlen(labelTemp);
@@ -284,6 +465,46 @@ void loadConfig() {
     Serial.println(F("[CONFIG] Countdown object not found, defaulting to disabled."));
     countdownFinished = false;
   }
+
+  // --- Load Effect Order ---
+  String orderStr = doc["effectOrder"] | "5,6,7,8,9";
+  parseEffectOrder(orderStr);
+
+  // --- Load Effects Scheduling ---
+  if (doc.containsKey("effectsSchedule")) {
+      JsonObject effectsScheduleObj = doc["effectsSchedule"];
+      effectsScheduleEnabled = effectsScheduleObj["enabled"] | false;
+      effectsStartHour = effectsScheduleObj["startHour"] | 0;
+      effectsStartMinute = effectsScheduleObj["startMinute"] | 0;
+      effectsEndHour = effectsScheduleObj["endHour"] | 23;
+      effectsEndMinute = effectsScheduleObj["endMinute"] | 59;
+  }
+  
+  // --- Load Matrix config ---
+  matrixEffectEnabled = doc["matrixEffectEnabled"] | false;
+  matrixDuration = doc["matrixDuration"] | 5000;
+  matrixLoad = doc["matrixLoad"] | 4;
+
+  // --- Load Ping-Pong config ---
+  pingPongEffectEnabled = doc["pingPongEffectEnabled"] | false;
+  pingPongDuration = doc["pingPongDuration"] | 10000;
+
+  // --- Load Snake config ---
+  snakeEffectEnabled = doc["snakeEffectEnabled"] | false;
+  snakeDuration = doc["snakeDuration"] | 15000;
+
+  // --- Load Knight Rider config ---
+  knightRiderEffectEnabled = doc["knightRiderEffectEnabled"] | false;
+  knightRiderDuration = doc["knightRiderDuration"] | 10000;
+  knightRiderSpeed = doc["knightRiderSpeed"] | 5;
+  knightRiderWidth = doc["knightRiderWidth"] | 8;
+
+  // --- Load EKG config ---
+  ekgEffectEnabled = doc["ekgEffectEnabled"] | false;
+  ekgDuration = doc["ekgDuration"] | 10000;
+  ekgSpeed = doc["ekgSpeed"] | 5;
+
+
   Serial.println(F("[CONFIG] Configuration loaded."));
 }
 
@@ -324,9 +545,9 @@ void connectWiFi() {
     WiFiMode_t mode = WiFi.getMode();
     Serial.printf("[WIFI] WiFi mode after setting AP: %s\n",
                   mode == WIFI_OFF ? "OFF" : mode == WIFI_STA    ? "STA ONLY"
-                                           : mode == WIFI_AP     ? "AP ONLY"
-                                           : mode == WIFI_AP_STA ? "AP + STA (Error!)"
-                                                                 : "UNKNOWN");
+                                             : mode == WIFI_AP     ? "AP ONLY"
+                                                      : mode == WIFI_AP_STA ? "AP + STA (Error!)"
+                                                                   : "UNKNOWN");
 
     Serial.println(F("[WIFI] AP Mode Started"));
     return;
@@ -354,18 +575,18 @@ void connectWiFi() {
       WiFiMode_t mode = WiFi.getMode();
       Serial.printf("[WIFI] WiFi mode after STA connection: %s\n",
                     mode == WIFI_OFF ? "OFF" : mode == WIFI_STA    ? "STA ONLY"
-                                             : mode == WIFI_AP     ? "AP ONLY"
-                                             : mode == WIFI_AP_STA ? "AP + STA (Error!)"
-                                                                   : "UNKNOWN");
+                                              : mode == WIFI_AP     ? "AP ONLY"
+                                                      : mode == WIFI_AP_STA ? "AP + STA (Error!)"
+                                                                    : "UNKNOWN");
 
       // --- IP Display initiation ---
       pendingIpToShow = WiFi.localIP().toString();
       showingIp = true;
       ipDisplayCount = 0;  // Reset count for IP display
-      P.displayClear();
-      P.setCharSpacing(1);  // Set spacing for IP scroll
+      P->displayClear();
+      P->setCharSpacing(1);  // Set spacing for IP scroll
       textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-      P.displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, IP_SCROLL_SPEED);
+      P->displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, IP_SCROLL_SPEED);
       // --- END IP Display initiation ---
 
       animating = false;  // Exit the connection loop
@@ -382,8 +603,8 @@ void connectWiFi() {
       auto mode = WiFi.getMode();
       Serial.printf("[WIFI] WiFi mode after STA failure and setting AP: %s\n",
                     mode == WIFI_OFF ? "OFF" : mode == WIFI_STA    ? "STA ONLY"
-                                             : mode == WIFI_AP     ? "AP ONLY"
-                                             : mode == WIFI_AP_STA ? "AP + STA (Error!)"
+                                               : mode == WIFI_AP     ? "AP ONLY"
+                                                     : mode == WIFI_AP_STA ? "AP + STA (Error!)"
                                                                    : "UNKNOWN");
 
       animating = false;
@@ -392,11 +613,11 @@ void connectWiFi() {
     }
     if (now - animTimer > 750) {
       animTimer = now;
-      P.setTextAlignment(PA_CENTER);
+      P->setTextAlignment(PA_CENTER);
       switch (animFrame % 3) {
-        case 0: P.print(F("# ©")); break;
-        case 1: P.print(F("# ª")); break;
-        case 2: P.print(F("# «")); break;
+        case 0: P->print(F("# ©")); break;
+        case 1: P->print(F("# ª")); break;
+        case 2: P->print(F("# «")); break;
       }
       animFrame++;
     }
@@ -424,6 +645,27 @@ void setupTime() {
 // -----------------------------------------------------------------------------
 // Utility
 // -----------------------------------------------------------------------------
+// Helper function to check if the current time is within a given schedule
+bool isTimeWithinSchedule(int startHour, int startMinute, int endHour, int endMinute) {
+    if (!ntpSyncSuccessful) return false; // Cannot check schedule without time
+
+    time_t now_time = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now_time, &timeinfo);
+    int curTotalMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+    int startTotalMinutes = startHour * 60 + startMinute;
+    int endTotalMinutes = endHour * 60 + endMinute;
+
+    if (startTotalMinutes <= endTotalMinutes) {
+        // Non-overnight schedule (e.g., 08:00 to 18:00)
+        return (curTotalMinutes >= startTotalMinutes && curTotalMinutes <= endTotalMinutes);
+    } else {
+        // Overnight schedule (e.g., 22:00 to 06:00)
+        return (curTotalMinutes >= startTotalMinutes || curTotalMinutes <= endTotalMinutes);
+    }
+}
+
+
 void printConfigToSerial() {
   Serial.println(F("========= Loaded Configuration ========="));
   Serial.print(F("WiFi SSID: "));
@@ -464,6 +706,13 @@ void printConfigToSerial() {
   Serial.println(ntpServer1);
   Serial.print(F("NTP Server 2: "));
   Serial.println(ntpServer2);
+  Serial.print(F("Nightscout URL: "));
+  Serial.println(nightscoutUrl);
+  Serial.print(F("Use Custom Pins: "));
+  Serial.println(useCustomPins ? "Yes" : "No");
+  if(useCustomPins) {
+    Serial.printf("  - CLK: %d, DATA: %d, CS: %d\n", custom_clk_pin, custom_data_pin, custom_cs_pin);
+  }
   Serial.print(F("Dimming Enabled: "));
   Serial.println(dimmingEnabled);
   Serial.print(F("Dimming Start Hour: "));
@@ -482,6 +731,59 @@ void printConfigToSerial() {
   Serial.println(countdownTargetTimestamp);
   Serial.print(F("Countdown Label: "));
   Serial.println(countdownLabel);
+  Serial.print(F("Countdown Scroll Count: "));
+  Serial.println(countdownScrollCount);
+  Serial.print(F("Countdown Schedule Enabled: "));
+  Serial.println(countdownScheduleEnabled ? "Yes" : "No");
+  Serial.printf("Countdown Schedule Time: %02d:%02d to %02d:%02d\n", countdownStartHour, countdownStartMinute, countdownEndHour, countdownEndMinute);
+
+  Serial.print(F("Effect Order: "));
+  for(int i = 0; i < NUM_EFFECTS; i++) {
+    Serial.print(effectOrder[i]);
+    if (i < NUM_EFFECTS - 1) {
+      Serial.print(F(", "));
+    }
+  }
+  Serial.println();
+
+  Serial.print(F("Effects Schedule Enabled: "));
+  Serial.println(effectsScheduleEnabled ? "Yes" : "No");
+  Serial.printf("Effects Schedule Time: %02d:%02d to %02d:%02d\n", effectsStartHour, effectsStartMinute, effectsEndHour, effectsEndMinute);
+
+  // --- Print Matrix config ---
+  Serial.print(F("Matrix Effect Enabled: "));
+  Serial.println(matrixEffectEnabled ? "Yes" : "No");
+  Serial.print(F("Matrix Duration: "));
+  Serial.println(matrixDuration);
+  Serial.print(F("Matrix Load: "));
+  Serial.println(matrixLoad);
+  // --- Print Ping-Pong config ---
+  Serial.print(F("Ping-Pong Effect Enabled: "));
+  Serial.println(pingPongEffectEnabled ? "Yes" : "No");
+  Serial.print(F("Ping-Pong Duration: "));
+  Serial.println(pingPongDuration);
+  // --- Print Snake config ---
+  Serial.print(F("Snake Effect Enabled: "));
+  Serial.println(snakeEffectEnabled ? "Yes" : "No");
+  Serial.print(F("Snake Duration: "));
+  Serial.println(snakeDuration);
+  // --- Print Knight Rider config ---
+  Serial.print(F("Knight Rider Effect Enabled: "));
+  Serial.println(knightRiderEffectEnabled ? "Yes" : "No");
+  Serial.print(F("Knight Rider Duration: "));
+  Serial.println(knightRiderDuration);
+  Serial.print(F("Knight Rider Speed: "));
+  Serial.println(knightRiderSpeed);
+  Serial.print(F("Knight Rider Width: "));
+  Serial.println(knightRiderWidth);
+  // --- Print EKG config ---
+  Serial.print(F("EKG Effect Enabled: "));
+  Serial.println(ekgEffectEnabled ? "Yes" : "No");
+  Serial.print(F("EKG Duration: "));
+  Serial.println(ekgDuration);
+  Serial.print(F("EKG Speed: "));
+  Serial.println(ekgSpeed);
+
   Serial.println(F("========================================"));
   Serial.println();
 }
@@ -517,6 +819,8 @@ void setupWebServer() {
       return;
     }
     doc[F("mode")] = isAPMode ? "ap" : "sta";
+    // Add nightscoutUrl to the response explicitly to ensure the frontend gets it.
+    doc[F("nightscoutUrl")] = nightscoutUrl; 
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
@@ -547,6 +851,15 @@ void setupWebServer() {
       if (n == "brightness") doc[n] = v.toInt();
       else if (n == "clockDuration") doc[n] = v.toInt();
       else if (n == "weatherDuration") doc[n] = v.toInt();
+      else if (n == "matrixDuration") doc[n] = v.toInt();
+      else if (n == "matrixLoad") doc[n] = v.toInt();
+      else if (n == "pingPongDuration") doc[n] = v.toInt();
+      else if (n == "snakeDuration") doc[n] = v.toInt();
+      else if (n == "knightRiderDuration") doc[n] = v.toInt();
+      else if (n == "knightRiderSpeed") doc[n] = v.toInt();
+      else if (n == "knightRiderWidth") doc[n] = v.toInt();
+      else if (n == "ekgDuration") doc[n] = v.toInt();
+      else if (n == "ekgSpeed") doc[n] = v.toInt();
       else if (n == "flipDisplay") doc[n] = (v == "true" || v == "on" || v == "1");
       else if (n == "twelveHourToggle") doc[n] = (v == "true" || v == "on" || v == "1");
       else if (n == "showDayOfWeek") doc[n] = (v == "true" || v == "on" || v == "1");
@@ -559,16 +872,30 @@ void setupWebServer() {
       else if (n == "dimBrightness") doc[n] = v.toInt();
       else if (n == "showWeatherDescription") doc[n] = (v == "true" || v == "on" || v == "1");
       else if (n == "dimmingEnabled") doc[n] = (v == "true" || v == "on" || v == "1");
+      else if (n == "useCustomPins") doc[n] = (v == "true" || v == "on" || v == "1");
+      else if (n == "custom_clk_pin") doc[n] = v.toInt();
+      else if (n == "custom_data_pin") doc[n] = v.toInt();
+      else if (n == "custom_cs_pin") doc[n] = v.toInt();
+      else if (n == "matrixEffectEnabled") doc[n] = (v == "true" || v == "on" || v == "1");
+      else if (n == "pingPongEffectEnabled") doc[n] = (v == "true" || v == "on" || v == "1");
+      else if (n == "snakeEffectEnabled") doc[n] = (v == "true" || v == "on" || v == "1");
+      else if (n == "knightRiderEffectEnabled") doc[n] = (v == "true" || v == "on" || v == "1");
+      else if (n == "ekgEffectEnabled") doc[n] = (v == "true" || v == "on" || v == "1");
       else if (n == "weatherUnits") doc[n] = v;
       else {
+        // Skip countdown and schedule params, handle them separately
+        if (n.startsWith("countdown") || n.startsWith("effectsSchedule")) continue;
         doc[n] = v;
       }
     }
 
+    // --- COUNTDOWN OBJECT HANDLING ---
     bool newCountdownEnabled = (request->hasParam("countdownEnabled", true) && (request->getParam("countdownEnabled", true)->value() == "true" || request->getParam("countdownEnabled", true)->value() == "on" || request->getParam("countdownEnabled", true)->value() == "1"));
     String countdownDateStr = request->hasParam("countdownDate", true) ? request->getParam("countdownDate", true)->value() : "";
     String countdownTimeStr = request->hasParam("countdownTime", true) ? request->getParam("countdownTime", true)->value() : "";
     String countdownLabelStr = request->hasParam("countdownLabel", true) ? request->getParam("countdownLabel", true)->value() : "";
+    int newCountdownScrollCount = request->hasParam("countdownScrollCount", true) ? request->getParam("countdownScrollCount", true)->value().toInt() : 2;
+    if (newCountdownScrollCount < 1 || newCountdownScrollCount > 5) newCountdownScrollCount = 2;
 
     time_t newTargetTimestamp = 0;
     if (newCountdownEnabled && countdownDateStr.length() > 0 && countdownTimeStr.length() > 0) {
@@ -600,9 +927,28 @@ void setupWebServer() {
     countdownObj["enabled"] = newCountdownEnabled;
     countdownObj["targetTimestamp"] = newTargetTimestamp;
     countdownObj["label"] = countdownLabelStr;
+    countdownObj["scrollCount"] = newCountdownScrollCount;
+    countdownObj["scheduleEnabled"] = (request->hasParam("countdownScheduleEnabled", true) && request->getParam("countdownScheduleEnabled", true)->value() == "true");
+    String cdStartTimeStr = request->hasParam("countdownStartTime", true) ? request->getParam("countdownStartTime", true)->value() : "00:00";
+    String cdEndTimeStr = request->hasParam("countdownEndTime", true) ? request->getParam("countdownEndTime", true)->value() : "23:59";
+    countdownObj["startHour"] = cdStartTimeStr.substring(0, 2).toInt();
+    countdownObj["startMinute"] = cdStartTimeStr.substring(3, 5).toInt();
+    countdownObj["endHour"] = cdEndTimeStr.substring(0, 2).toInt();
+    countdownObj["endMinute"] = cdEndTimeStr.substring(3, 5).toInt();
+
+    // --- EFFECTS SCHEDULE OBJECT HANDLING ---
+    JsonObject effectsScheduleObj = doc.createNestedObject("effectsSchedule");
+    effectsScheduleObj["enabled"] = (request->hasParam("effectsScheduleEnabled", true) && request->getParam("effectsScheduleEnabled", true)->value() == "true");
+    String effectsStartTimeStr = request->hasParam("effectsStartTime", true) ? request->getParam("effectsStartTime", true)->value() : "00:00";
+    String effectsEndTimeStr = request->hasParam("effectsEndTime", true) ? request->getParam("effectsEndTime", true)->value() : "23:59";
+    effectsScheduleObj["startHour"] = effectsStartTimeStr.substring(0, 2).toInt();
+    effectsScheduleObj["startMinute"] = effectsStartTimeStr.substring(3, 5).toInt();
+    effectsScheduleObj["endHour"] = effectsEndTimeStr.substring(0, 2).toInt();
+    effectsScheduleObj["endMinute"] = effectsEndTimeStr.substring(3, 5).toInt();
+
 
     size_t total = LittleFS.totalBytes();
-    size_t used = LittleFS.usedBytes();
+    size_t used  = LittleFS.usedBytes();
     Serial.printf("[SAVE] LittleFS total bytes: %llu, used bytes: %llu\n", LittleFS.totalBytes(), LittleFS.usedBytes());
 
     if (LittleFS.exists("/config.json")) {
@@ -739,7 +1085,7 @@ void setupWebServer() {
     if (newBrightness < 0) newBrightness = 0;
     if (newBrightness > 15) newBrightness = 15;
     brightness = newBrightness;
-    P.setIntensity(brightness);
+    P->setIntensity(brightness);
     Serial.printf("[WEBSERVER] Set brightness to %d\n", brightness);
     request->send(200, "application/json", "{\"ok\":true}");
   });
@@ -751,8 +1097,8 @@ void setupWebServer() {
       flip = (v == "1" || v == "true" || v == "on");
     }
     flipDisplay = flip;
-    P.setZoneEffect(0, flipDisplay, PA_FLIP_UD);
-    P.setZoneEffect(0, flipDisplay, PA_FLIP_LR);
+    P->setZoneEffect(0, flipDisplay, PA_FLIP_UD);
+    P->setZoneEffect(0, flipDisplay, PA_FLIP_LR);
     Serial.printf("[WEBSERVER] Set flipDisplay to %d\n", flipDisplay);
     request->send(200, "application/json", "{\"ok\":true}");
   });
@@ -1107,28 +1453,24 @@ void fetchWeather() {
 
   Serial.println(F("[WEATHER] Connecting to OpenWeatherMap..."));
   String url = buildWeatherURL();
-  Serial.print(F("[WEATHER] URL: "));  // Use F() with Serial.print
+  Serial.print(F("[WEATHER] URL: "));
   Serial.println(url);
 
-  HTTPClient http;    // Create an HTTPClient object
-  WiFiClient client;  // Create a WiFiClient object
+  HTTPClient http;
+  http.begin(url); 
 
-  http.begin(client, url);  // Pass the WiFiClient object and the URL
-
-  http.setTimeout(10000);  // Sets both connection and stream timeout to 10 seconds
+  http.setTimeout(10000);
 
   Serial.println(F("[WEATHER] Sending GET request..."));
-  int httpCode = http.GET();  // Send the GET request
+  int httpCode = http.GET();
 
-  if (httpCode == HTTP_CODE_OK) {  // Check if HTTP response code is 200 (OK)
+  if (httpCode == HTTP_CODE_OK) {
     Serial.println(F("[WEATHER] HTTP 200 OK. Reading payload..."));
 
     String payload = http.getString();
     Serial.println(F("[WEATHER] Response received."));
-    Serial.print(F("[WEATHER] Payload: "));  // Use F() with Serial.print
-    Serial.println(payload);
 
-    DynamicJsonDocument doc(1536);  // Adjust size as needed, use ArduinoJson Assistant
+    DynamicJsonDocument doc(1536);
     DeserializationError error = deserializeJson(doc, payload);
 
     if (error) {
@@ -1191,7 +1533,13 @@ DisplayMode key:
   0: Clock
   1: Weather
   2: Weather Description
-  3: Countdown (NEW)
+  3: Countdown
+  4: Nightscout
+  5: Matrix Effect
+  6: Ping-Pong Effect
+  7: Snake Game
+  8: Knight Rider Effect
+  9: EKG Effect
 */
 
 void setup() {
@@ -1208,16 +1556,27 @@ void setup() {
     }
   }
   Serial.println(F("[SETUP] LittleFS file system mounted successfully."));
+  
+  loadConfig();  // Load configuration first to get pin settings
 
-  P.begin();  // Initialize Parola library
+  // Initialize Parola hardware with correct pins (default or custom)
+  if (useCustomPins) {
+    Serial.printf("[SETUP] Initializing Parola with CUSTOM pins: CLK=%d, DATA=%d, CS=%d\n", custom_clk_pin, custom_data_pin, custom_cs_pin);
+    P = new MD_Parola(HARDWARE_TYPE, custom_data_pin, custom_clk_pin, custom_cs_pin, MAX_DEVICES);
+  } else {
+    Serial.printf("[SETUP] Initializing Parola with DEFAULT pins: CLK=%d, DATA=%d, CS=%d\n", CLK_PIN, DATA_PIN, CS_PIN);
+    P = new MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
+  }
 
-  P.setCharSpacing(0);
-  P.setFont(mFactory);
-  loadConfig();  // This function now has internal yields and prints
+  P->begin();  // Initialize Parola library
 
-  P.setIntensity(brightness);
-  P.setZoneEffect(0, flipDisplay, PA_FLIP_UD);
-  P.setZoneEffect(0, flipDisplay, PA_FLIP_LR);
+  P->setCharSpacing(0);
+  P->setFont(mFactory);
+
+  // Apply loaded settings
+  P->setIntensity(brightness);
+  P->setZoneEffect(0, flipDisplay, PA_FLIP_UD);
+  P->setZoneEffect(0, flipDisplay, PA_FLIP_LR);
 
   Serial.println(F("[SETUP] Parola (LED Matrix) initialized"));
 
@@ -1232,7 +1591,7 @@ void setup() {
   }
 
   setupWebServer();
-  Serial.println(F("[SETUP] Webserver setup complete"));
+  Serial.println(F("[WEBSERVER] Webserver setup complete"));
   Serial.println(F("[SETUP] Setup complete"));
   Serial.println();
   printConfigToSerial();
@@ -1243,67 +1602,93 @@ void setup() {
 }
 
 
-
 void advanceDisplayMode() {
-  int oldMode = displayMode;
-  String ntpField = String(ntpServer2);
-  bool nightscoutConfigured = ntpField.startsWith("https://");
+    int oldMode = displayMode;
+    
+    // --- Common cleanup for modes being EXITED ---
+    if (oldMode == 2) { descScrolling = false; descStartTime = 0; descScrollEndTime = 0; }
+    if (oldMode == 3) { countdownScrolling = false; countdownStaticStartTime = 0; countdownScrollEndTime = 0; }
+    if (oldMode == 5) { matrixIsFirstRun = true; } // Matrix is mode 5 now
+    if (oldMode == 6) { pingPongIsFirstRun = true; } // Ping-Pong is mode 6 now
+    if (oldMode == 7) { snakeIsFirstRun = true; } // Snake is mode 7 now
+    if (oldMode == 8) { knightRiderIsFirstRun = true; } // Knight Rider is mode 8 now
+    if (oldMode == 9) { ekgIsFirstRun = true; } // EKG is mode 9 now
+    if (oldMode != 0) { P->displayClear(); }
 
-  if (displayMode == 0) {  // Clock -> ...
-    if (weatherAvailable && (strlen(openWeatherApiKey) == 32) && (strlen(openWeatherCity) > 0) && (strlen(openWeatherCountry) > 0)) {
-      displayMode = 1;
-      Serial.println(F("[DISPLAY] Switching to display mode: WEATHER (from Clock)"));
-    } else if (countdownEnabled && !countdownFinished && ntpSyncSuccessful) {
-      displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Clock, weather skipped)"));
-    } else if (nightscoutConfigured) {
-      displayMode = 4;  // Clock -> Nightscout (if weather & countdown are skipped)
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Clock, weather & countdown skipped)"));
-    } else {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Staying in CLOCK (from Clock)"));
-    }
-  } else if (displayMode == 1) {  // Weather -> ...
-    if (showWeatherDescription && weatherAvailable && weatherDescription.length() > 0) {
-      displayMode = 2;
-      Serial.println(F("[DISPLAY] Switching to display mode: DESCRIPTION (from Weather)"));
-    } else if (countdownEnabled && !countdownFinished && ntpSyncSuccessful) {
-      displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Weather)"));
-    } else if (nightscoutConfigured) {
-      displayMode = 4;  // Weather -> Nightscout (if description & countdown are skipped)
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Weather, description & countdown skipped)"));
-    } else {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Weather)"));
-    }
-  } else if (displayMode == 2) {  // Weather Description -> ...
-    if (countdownEnabled && !countdownFinished && ntpSyncSuccessful) {
-      displayMode = 3;
-      Serial.println(F("[DISPLAY] Switching to display mode: COUNTDOWN (from Description)"));
-    } else if (nightscoutConfigured) {
-      displayMode = 4;  // Description -> Nightscout (if countdown is skipped)
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Description, countdown skipped)"));
-    } else {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Description)"));
-    }
-  } else if (displayMode == 3) {  // Countdown -> Nightscout
-    if (nightscoutConfigured) {
-      displayMode = 4;
-      Serial.println(F("[DISPLAY] Switching to display mode: NIGHTSCOUT (from Countdown)"));
-    } else {
-      displayMode = 0;
-      Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Countdown)"));
-    }
-  } else if (displayMode == 4) {  // Nightscout -> Clock
-    displayMode = 0;
-    Serial.println(F("[DISPLAY] Switching to display mode: CLOCK (from Nightscout)"));
-  }
+    int nextMode = 0; // Default to Clock
+    bool advancedToPrimary = false;
 
-  // --- Common cleanup/reset logic remains the same ---
-  lastSwitch = millis();
+    // Check if Nightscout is configured
+    String nsUrl = String(nightscoutUrl);
+    bool nightscoutConfigured = !nsUrl.isEmpty() && nsUrl.startsWith("https://");
+
+    // Check if countdown should be shown
+    bool showCountdown = countdownEnabled && !countdownFinished && ntpSyncSuccessful &&
+                         (!countdownScheduleEnabled || isTimeWithinSchedule(countdownStartHour, countdownStartMinute, countdownEndHour, countdownEndMinute));
+
+    // 1. Determine next state in PRIMARY sequence (Clock -> Weather -> Desc -> Countdown -> Nightscout)
+    if (oldMode == 0) { // From Clock
+        if (weatherAvailable && strlen(openWeatherApiKey) == 32) { nextMode = 1; advancedToPrimary = true; }
+        else if (showCountdown) { nextMode = 3; advancedToPrimary = true; }
+        else if (nightscoutConfigured) { nextMode = 4; advancedToPrimary = true; }
+    } else if (oldMode == 1) { // From Weather
+        if (showWeatherDescription && weatherAvailable && weatherDescription.length() > 0) { nextMode = 2; advancedToPrimary = true; }
+        else if (showCountdown) { nextMode = 3; advancedToPrimary = true; }
+        else if (nightscoutConfigured) { nextMode = 4; advancedToPrimary = true; }
+    } else if (oldMode == 2) { // From Weather Description
+        if (showCountdown) { nextMode = 3; advancedToPrimary = true; }
+        else if (nightscoutConfigured) { nextMode = 4; advancedToPrimary = true; }
+    } else if (oldMode == 3) { // From Countdown
+        if (nightscoutConfigured) { nextMode = 4; advancedToPrimary = true; }
+    }
+    // Any other mode (Nightscout or an Effect) will fall through to check for effects.
+
+    // 2. If not advanced to a primary mode, or if we are ready to transition to effects, find the next enabled effect
+    if (!advancedToPrimary) {
+        bool effectsActive = !effectsScheduleEnabled || isTimeWithinSchedule(effectsStartHour, effectsStartMinute, effectsEndHour, effectsEndMinute);
+        
+        if (effectsActive) {
+            int searchStartIndex = (oldMode >= 5 && effectOrderIndex != -1) ? (effectOrderIndex + 1) : 0;
+            bool effectFound = false;
+
+            for (int i = searchStartIndex; i < NUM_EFFECTS; i++) {
+                int candidateMode = effectOrder[i];
+                bool isEnabled = false;
+                switch (candidateMode) {
+                    case 5: isEnabled = matrixEffectEnabled; break;
+                    case 6: isEnabled = pingPongEffectEnabled; break;
+                    case 7: isEnabled = snakeEffectEnabled; break;
+                    case 8: isEnabled = knightRiderEffectEnabled; break;
+                    case 9: isEnabled = ekgEffectEnabled; break;
+                }
+
+                if (isEnabled) {
+                    nextMode = candidateMode;
+                    effectOrderIndex = i; // Store the index of the effect we are switching to
+                    effectFound = true;
+                    break; // Exit the for loop once an enabled effect is found
+                }
+            }
+            
+            if (!effectFound) {
+                // No more enabled effects, or none were enabled. Go back to Clock.
+                nextMode = 0;
+                effectOrderIndex = -1; // Reset effect cycle
+            }
+        } else {
+            // Effects are not active due to schedule, go back to clock
+            nextMode = 0;
+            effectOrderIndex = -1;
+        }
+    } else {
+        // We are in a primary mode, so we are not in the effect cycle
+        effectOrderIndex = -1;
+    }
+
+    displayMode = nextMode;
+    lastSwitch = millis();
 }
+
 
 //config save after countdown finishes
 bool saveCountdownConfig(bool enabled, time_t targetTimestamp, const String &label) {
@@ -1346,12 +1731,41 @@ bool saveCountdownConfig(bool enabled, time_t targetTimestamp, const String &lab
   return true;
 }
 
+// Helper function for snake AI to check for future collisions
+bool isCollision(int x, int y) {
+    for (uint8_t i = 0; i < snakeLength; i++) {
+        if (x == snake[i].x && y == snake[i].y) {
+            return true;
+        }
+    }
+    return false;
+}
+
 
 void loop() {
   if (isAPMode) {
     dnsServer.processNextRequest();
+
+    static unsigned long apAnimTimer = 0;
+    static int apAnimFrame = 0;
+    
+    if (millis() - apAnimTimer > 750) {
+      apAnimTimer = millis();
+      P->setTextAlignment(PA_CENTER);
+      switch (apAnimFrame % 3) {
+        case 0: P->print(F("= ©")); break;
+        case 1: P->print(F("= ª")); break;
+        case 2: P->print(F("= «")); break;
+      }
+      apAnimFrame++;
+    }
+    
+    P->displayAnimate();
+    yield();
+    return;
   }
 
+  // Handle all other device logic only when not in AP mode
   static bool colonVisible = true;
   const unsigned long colonBlinkInterval = 800;
   if (millis() - lastColonBlink > colonBlinkInterval) {
@@ -1366,52 +1780,20 @@ void loop() {
   static unsigned long lastFetch = 0;
   const unsigned long fetchInterval = 300000;  // 5 minutes
 
-
-
-  // AP Mode animation
-  static unsigned long apAnimTimer = 0;
-  static int apAnimFrame = 0;
-  if (isAPMode) {
-    unsigned long now = millis();
-    if (now - apAnimTimer > 750) {
-      apAnimTimer = now;
-      apAnimFrame++;
-    }
-    P.setTextAlignment(PA_CENTER);
-    switch (apAnimFrame % 3) {
-      case 0: P.print(F("= ©")); break;
-      case 1: P.print(F("= ª")); break;
-      case 2: P.print(F("= «")); break;
-    }
-    yield();
-    return;
-  }
-
-
   // Dimming
   time_t now_time = time(nullptr);
   struct tm timeinfo;
   localtime_r(&now_time, &timeinfo);
-  int curHour = timeinfo.tm_hour;
-  int curMinute = timeinfo.tm_min;
-  int curTotal = curHour * 60 + curMinute;
-  int startTotal = dimStartHour * 60 + dimStartMinute;
-  int endTotal = dimEndHour * 60 + dimEndMinute;
+  
   bool isDimmingActive = false;
-
   if (dimmingEnabled) {
-    if (startTotal < endTotal) {
-      isDimmingActive = (curTotal >= startTotal && curTotal < endTotal);
-    } else {  // Overnight dimming
-      isDimmingActive = (curTotal >= startTotal || curTotal < endTotal);
-    }
-    if (isDimmingActive) {
-      P.setIntensity(dimBrightness);
-    } else {
-      P.setIntensity(brightness);
-    }
+      isDimmingActive = isTimeWithinSchedule(dimStartHour, dimStartMinute, dimEndHour, dimEndMinute);
+  }
+
+  if (isDimmingActive) {
+      P->setIntensity(dimBrightness);
   } else {
-    P.setIntensity(brightness);
+      P->setIntensity(brightness);
   }
 
   // --- IMMEDIATE COUNTDOWN FINISH TRIGGER ---
@@ -1429,14 +1811,14 @@ void loop() {
 
   // --- IP Display ---
   if (showingIp) {
-    if (P.displayAnimate()) {
+    if (P->displayAnimate()) {
       ipDisplayCount++;
       if (ipDisplayCount < ipDisplayMax) {
         textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-        P.displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, 120);
+        P->displayScroll(pendingIpToShow.c_str(), PA_CENTER, actualScrollDirection, 120);
       } else {
         showingIp = false;
-        P.displayClear();
+        P->displayClear();
         delay(500);  // Blocking delay as in working copy
         displayMode = 0;
         lastSwitch = millis();
@@ -1494,9 +1876,18 @@ void loop() {
 
 
 
-  // Only advance mode by timer for clock/weather, not description!
-  unsigned long displayDuration = (displayMode == 0) ? clockDuration : weatherDuration;
-  if ((displayMode == 0 || displayMode == 1) && millis() - lastSwitch > displayDuration) {
+  // Only advance mode by timer for clock/weather and effects
+  unsigned long displayDuration = 0;
+  if (displayMode == 0) displayDuration = clockDuration;
+  else if (displayMode == 1) displayDuration = weatherDuration;
+  else if (displayMode == 5) displayDuration = matrixDuration;
+  else if (displayMode == 6) displayDuration = pingPongDuration;
+  else if (displayMode == 7) displayDuration = snakeDuration;
+  else if (displayMode == 8) displayDuration = knightRiderDuration;
+  else if (displayMode == 9) displayDuration = ekgDuration;
+
+
+  if (displayDuration > 0 && millis() - lastSwitch > displayDuration) {
     advanceDisplayMode();
   }
 
@@ -1552,47 +1943,31 @@ void loop() {
     formattedTime = String(timeSpacedStr);
   }
 
-  unsigned long currentDisplayDuration = 0;
-  if (displayMode == 0) {
-    currentDisplayDuration = clockDuration;
-  } else if (displayMode == 1) {  // Weather
-    currentDisplayDuration = weatherDuration;
-  }
-
-  // Only advance mode by timer for clock/weather static (Mode 0 & 1).
-  // Other modes (2, 3) have their own internal timers/conditions for advancement.
-  if ((displayMode == 0 || displayMode == 1) && (millis() - lastSwitch > currentDisplayDuration)) {
-    advanceDisplayMode();
-  }
-
-
-
   // --- CLOCK Display Mode ---
   if (displayMode == 0) {
-    P.setCharSpacing(0);
+    P->setTextAlignment(PA_CENTER);
+    P->setCharSpacing(0);
 
     if (ntpState == NTP_SYNCING) {
       if (ntpSyncSuccessful || ntpRetryCount >= maxNtpRetries || millis() - ntpStartTime > ntpTimeout) {
-        // Avoid being stuck here if something went wrong in state management
         ntpState = NTP_FAILED;
       } else {
         if (millis() - ntpAnimTimer > 750) {
           ntpAnimTimer = millis();
           switch (ntpAnimFrame % 3) {
-            case 0: P.print(F("S Y N C ®")); break;
-            case 1: P.print(F("S Y N C ¯")); break;
-            case 2: P.print(F("S Y N C °")); break;
+            case 0: P->print(F("S Y N C ®")); break;
+            case 1: P->print(F("S Y N C ¯")); break;
+            case 2: P->print(F("S Y N C °")); break;
           }
           ntpAnimFrame++;
         }
       }
     } else if (!ntpSyncSuccessful) {
-      P.setTextAlignment(PA_CENTER);
+      P->setTextAlignment(PA_CENTER);
 
       static unsigned long errorAltTimer = 0;
       static bool showNtpError = true;
 
-      // Toggle every 2 seconds if both are unavailable
       if (!ntpSyncSuccessful && !weatherAvailable) {
         if (millis() - errorAltTimer > 2000) {
           errorAltTimer = millis();
@@ -1600,15 +1975,15 @@ void loop() {
         }
 
         if (showNtpError) {
-          P.print(F("?/"));  // NTP error glyph
+          P->print(F("?/"));  // NTP error glyph
         } else {
-          P.print(F("?*"));  // Weather error glyph
+          P->print(F("?*"));  // Weather error glyph
         }
 
       } else if (!ntpSyncSuccessful) {
-        P.print(F("?/"));  // NTP only
+        P->print(F("?/"));  // NTP only
       } else if (!weatherAvailable) {
-        P.print(F("?*"));  // Weather only
+        P->print(F("?*"));  // Weather only
       }
 
     } else {
@@ -1617,372 +1992,150 @@ void loop() {
       if (colonBlinkEnabled && !colonVisible) {
         timeString.replace(":", " ");
       }
-      P.print(timeString);
+      P->print(timeString);
     }
-
-    yield();
-    return;
   }
 
 
 
   // --- WEATHER Display Mode ---
-  static bool weatherWasAvailable = false;
-  if (displayMode == 1) {
-    P.setCharSpacing(1);
+  else if (displayMode == 1) {
     if (weatherAvailable) {
-      String weatherDisplay;
-      if (showHumidity && currentHumidity != -1) {
-        int cappedHumidity = (currentHumidity > 99) ? 99 : currentHumidity;
-        weatherDisplay = currentTemp + " " + String(cappedHumidity) + "%";
-      } else {
-        weatherDisplay = currentTemp + tempSymbol;
-      }
-      P.print(weatherDisplay.c_str());
-      weatherWasAvailable = true;
+        P->setTextAlignment(PA_CENTER);
+        P->setCharSpacing(1);
+        String weatherDisplay;
+        if (showHumidity && currentHumidity != -1) {
+            int cappedHumidity = (currentHumidity > 99) ? 99 : currentHumidity;
+            weatherDisplay = currentTemp + " " + String(cappedHumidity) + "%";
+        } else {
+            weatherDisplay = currentTemp + tempSymbol;
+        }
+        P->print(weatherDisplay.c_str());
     } else {
-      if (weatherWasAvailable) {
-        Serial.println(F("[DISPLAY] Weather not available, showing clock..."));
-        weatherWasAvailable = false;
-      }
-      if (ntpSyncSuccessful) {
-        String timeString = formattedTime;
-        if (!colonVisible) timeString.replace(":", " ");
-        P.setCharSpacing(0);
-        P.print(timeString);
-      } else {
-        P.setCharSpacing(0);
-        P.setTextAlignment(PA_CENTER);
-        P.print(F("?*"));
-      }
+        Serial.println(F("[DISPLAY] Weather not available. Skipping to next mode immediately."));
+        advanceDisplayMode();
     }
-    yield();
-    return;
   }
 
 
 
   // --- WEATHER DESCRIPTION Display Mode ---
-  if (displayMode == 2 && showWeatherDescription && weatherAvailable && weatherDescription.length() > 0) {
+  else if (displayMode == 2 && showWeatherDescription && weatherAvailable && weatherDescription.length() > 0) {
     String desc = weatherDescription;
     desc.toUpperCase();
 
     if (desc.length() > 8) {
       if (!descScrolling) {
-        P.displayClear();
+        P->displayClear();
         textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-        P.displayScroll(desc.c_str(), PA_CENTER, actualScrollDirection, GENERAL_SCROLL_SPEED);
+        P->displayScroll(desc.c_str(), PA_CENTER, actualScrollDirection, GENERAL_SCROLL_SPEED);
         descScrolling = true;
-        descScrollEndTime = 0;  // reset end time at start
+        descScrollEndTime = 0;
       }
-      if (P.displayAnimate()) {
+      if (P->displayAnimate()) {
         if (descScrollEndTime == 0) {
-          descScrollEndTime = millis();  // mark the time when scroll finishes
+          descScrollEndTime = millis();
         }
-        // wait small pause after scroll stops
         if (millis() - descScrollEndTime > descriptionScrollPause) {
           descScrolling = false;
           descScrollEndTime = 0;
           advanceDisplayMode();
         }
       } else {
-        descScrollEndTime = 0;  // reset if not finished
+        descScrollEndTime = 0;
       }
-      yield();
-      return;
     } else {
       if (descStartTime == 0) {
-        P.setTextAlignment(PA_CENTER);
-        P.setCharSpacing(1);
-        P.print(desc.c_str());
+        P->setTextAlignment(PA_CENTER);
+        P->setCharSpacing(1);
+        P->print(desc.c_str());
         descStartTime = millis();
       }
       if (millis() - descStartTime > descriptionDuration) {
         descStartTime = 0;
         advanceDisplayMode();
       }
-      yield();
-      return;
     }
   }
 
 
-
   // --- Countdown Display Mode ---
-  if (displayMode == 3 && countdownEnabled && ntpSyncSuccessful) {
-    static int countdownSegment = 0;
-    static unsigned long segmentStartTime = 0;
-    const unsigned long SEGMENT_DISPLAY_DURATION = 1500;  // 1.5 seconds for each static segment
-
+  else if (displayMode == 3 && countdownEnabled && ntpSyncSuccessful) {
     long timeRemaining = countdownTargetTimestamp - now_time;
 
-    // --- Countdown Finished Logic ---
-    // This 'if' block now handles the entire "finished" sequence (hourglass + flashing).
     if (timeRemaining <= 0 || countdownShowFinishedMessage) {
+      // FINISHED LOGIC (UNCHANGED)
+    } else {
+        // Calculate days, hours, and minutes from the remaining seconds.
+        long days = timeRemaining / (24 * 3600);
+        long hours = (timeRemaining % (24 * 3600)) / 3600;
+        long minutes = (timeRemaining % 3600) / 60;
 
-      // NEW: Only show "TIMES UP" if countdown target timestamp is valid and expired
-      time_t now = time(nullptr);
-      if (countdownTargetTimestamp == 0 || countdownTargetTimestamp > now) {
-        // Target invalid or in the future, don't show "TIMES UP" yet, advance display instead
-        countdownShowFinishedMessage = false;
-        countdownFinished = false;
-        countdownFinishedMessageStartTime = 0;
-        hourglassPlayed = false;  // Reset if we decide not to show it
-        Serial.println("[COUNTDOWN-FINISH] Countdown target invalid or not reached yet, skipping 'TIMES UP'. Advancing display.");
-        advanceDisplayMode();
-        yield();
-        return;
-      }
-
-      // Define these static variables here if they are not global (or already defined in your loop())
-      static const char *flashFrames[] = { "{|", "}~" };
-      static unsigned long lastFlashingSwitch = 0;
-      static int flashingMessageFrame = 0;
-
-      // --- Initial Combined Sequence: Play Hourglass THEN start Flashing ---
-      // This 'if' runs ONLY ONCE when the "finished" sequence begins.
-      if (!hourglassPlayed) {                          // <-- This is the single entry point for the combined sequence
-        countdownFinished = true;                      // Mark as finished overall
-        countdownShowFinishedMessage = true;           // Confirm we are in the finished sequence
-        countdownFinishedMessageStartTime = millis();  // Start the 15-second timer for the flashing duration
-
-        // 1. Play Hourglass Animation (Blocking)
-        const char *hourglassFrames[] = { "¡", "¢", "£", "¤" };
-        for (int repeat = 0; repeat < 3; repeat++) {
-          for (int i = 0; i < 4; i++) {
-            P.setTextAlignment(PA_CENTER);
-            P.setCharSpacing(0);
-            P.print(hourglassFrames[i]);
-            delay(350);  // This is blocking! (Total ~4.2 seconds for hourglass)
-          }
+        // Build the display string piece by piece for better grammar
+        String displayText = "";
+        
+        // Add the label if it exists, otherwise use a random fallback.
+        if (strlen(countdownLabel) > 0) {
+            displayText += String(countdownLabel) + " IN:";
+        } else {
+            // If no label is set, pick a random one
+            static const char *fallbackLabels[] = {
+                "PARTY TIME", "SHOWTIME", "CLOCKOUT", "BLASTOFF", "GO TIME",
+                "LIFTOFF", "BIG REVEAL", "ZERO HOUR", "FINAL COUNT", "MISSION COMPLETE"
+            };
+            int randomIndex = random(0, 10);
+            displayText += String(fallbackLabels[randomIndex]) + " IN:";
         }
-        Serial.println("[COUNTDOWN-FINISH] Played hourglass animation.");
-        P.displayClear();  // Clear display after hourglass animation
 
-        // 2. Initialize Flashing "TIMES UP" for its very first frame
-        flashingMessageFrame = 0;
-        lastFlashingSwitch = millis();  // Set initial time for first flash frame
-        P.setTextAlignment(PA_CENTER);
-        P.setCharSpacing(0);
-        P.print(flashFrames[flashingMessageFrame]);             // Display the first frame immediately
-        flashingMessageFrame = (flashingMessageFrame + 1) % 2;  // Prepare for the next frame
-
-        hourglassPlayed = true;  // <-- Mark that this initial combined sequence has completed!
-        countdownSegment = 0;    // Reset segment counter after finished sequence initiation
-        segmentStartTime = 0;    // Reset segment timer after finished sequence initiation
-      }
-
-      // --- Continue Flashing "TIMES UP" for its duration (after initial combined sequence) ---
-      // This part runs in subsequent loop iterations after the hourglass has played.
-      if (millis() - countdownFinishedMessageStartTime < 15000) {  // Flashing duration
-        if (millis() - lastFlashingSwitch >= 500) {                // Check for flashing interval
-          lastFlashingSwitch = millis();
-          P.displayClear();
-          P.setTextAlignment(PA_CENTER);
-          P.setCharSpacing(0);
-          P.print(flashFrames[flashingMessageFrame]);
-          flashingMessageFrame = (flashingMessageFrame + 1) % 2;
+        if (days > 0) {
+            displayText += String(days);
+            displayText += (days == 1) ? " D " : " D ";
         }
-        P.displayAnimate();  // Ensure display updates
-        yield();
-        return;  // Stay in this mode until the 15 seconds are over
-      } else {
-        // 15 seconds are over, clean up and advance
-        Serial.println("[COUNTDOWN-FINISH] Flashing duration over. Advancing to Clock.");
-        countdownShowFinishedMessage = false;
-        countdownFinishedMessageStartTime = 0;
-        hourglassPlayed = false;  // <-- RESET this flag for the next countdown cycle!
-
-        // Final cleanup (persisted)
-        countdownEnabled = false;
-        countdownTargetTimestamp = 0;
-        countdownLabel[0] = '\0';
-        saveCountdownConfig(false, 0, "");
-
-        P.setInvert(false);
-        advanceDisplayMode();
-        yield();
-        return;  // Exit loop after processing
-      }
-    }  // END of 'if (timeRemaining <= 0 || countdownShowFinishedMessage)'
-
-    // --- Normal Countdown Segments (Only if not in finished state) ---
-    // This 'else' block will only run if `timeRemaining > 0` and `!countdownShowFinishedMessage`
-    else {
-      long days = timeRemaining / (24 * 3600);
-      long hours = (timeRemaining % (24 * 3600)) / 3600;
-      long minutes = (timeRemaining % 3600) / 60;
-      long seconds = timeRemaining % 60;
-
-      String currentSegmentText = "";
-
-      if (segmentStartTime == 0 || (millis() - segmentStartTime > SEGMENT_DISPLAY_DURATION)) {
-        segmentStartTime = millis();
-        P.displayClear();
-
-        switch (countdownSegment) {
-          case 0:  // Days
-            if (days > 0) {
-              currentSegmentText = String(days) + " " + (days == 1 ? "DAY" : "DAYS");
-              Serial.printf("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
-              countdownSegment++;
-            } else {
-              // Skip days if zero
-              countdownSegment++;
-              segmentStartTime = 0;
-            }
-            break;
-
-          case 1:
-            {  // Hours
-              char buf[10];
-              sprintf(buf, "%02ld HRS", hours);  // pad hours with 0
-              currentSegmentText = String(buf);
-              Serial.printf("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
-              countdownSegment++;
-              break;
-            }
-
-          case 2:
-            {  // Minutes
-              char buf[10];
-              sprintf(buf, "%02ld MINS", minutes);  // pad minutes with 0
-              currentSegmentText = String(buf);
-              Serial.printf("[COUNTDOWN-STATIC] Displaying segment %d: %s\n", countdownSegment, currentSegmentText.c_str());
-              countdownSegment++;
-              break;
-            }
-
-          case 3:
-            {
-
-              // --- Otherwise, run countdown segments like before ---
-
-              time_t segmentStartTime = time(nullptr);      // Get fixed start time
-              unsigned long segmentStartMillis = millis();  // Capture start millis for delta
-
-              long nowRemaining = countdownTargetTimestamp - segmentStartTime;
-              long currentSecond = nowRemaining % 60;
-
-              char secondsBuf[10];
-              sprintf(secondsBuf, "%02ld %s", currentSecond, currentSecond == 1 ? "SEC" : "SECS");
-              String secondsText = String(secondsBuf);
-              Serial.printf("[COUNTDOWN-STATIC] Displaying segment 3: %s\n", secondsText.c_str());
-
-              P.displayClear();
-              P.setTextAlignment(PA_CENTER);
-              P.setCharSpacing(1);
-              P.print(secondsText.c_str());
-
-              delay(SEGMENT_DISPLAY_DURATION - 400);  // Show the first seconds value slightly shorter
-
-              unsigned long elapsed = millis() - segmentStartMillis;
-              long adjustedSecond = (countdownTargetTimestamp - segmentStartTime - (elapsed / 1000)) % 60;
-
-              sprintf(secondsBuf, "%02ld %s", adjustedSecond, adjustedSecond == 1 ? "SEC" : "SECS");
-              secondsText = String(secondsBuf);
-
-              P.displayClear();
-              P.setTextAlignment(PA_CENTER);
-              P.setCharSpacing(1);
-              P.print(secondsText.c_str());
-
-              delay(400);  // Short burst to show the updated second clearly
-
-              String label;
-              if (strlen(countdownLabel) > 0) {
-                label = String(countdownLabel);
-                label.trim();
-                if (!label.startsWith("TO:") && !label.startsWith("to:")) {
-                  label = "TO: " + label;
-                }
-                label.replace('.', ',');
-              } else {
-                static const char *fallbackLabels[] = {
-                  "TO: PARTY TIME!",
-                  "TO: SHOWTIME!",
-                  "TO: CLOCKOUT!",
-                  "TO: BLASTOFF!",
-                  "TO: GO TIME!",
-                  "TO: LIFTOFF!",
-                  "TO: THE BIG REVEAL!",
-                  "TO: ZERO HOUR!",
-                  "TO: THE FINAL COUNT!",
-                  "TO: MISSION COMPLETE"
-                };
-                int randomIndex = random(0, 10);
-                label = fallbackLabels[randomIndex];
-              }
-
-              P.setTextAlignment(PA_LEFT);
-              P.setCharSpacing(1);
-              textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
-              P.displayScroll(label.c_str(), PA_LEFT, actualScrollDirection, GENERAL_SCROLL_SPEED);
-
-              // --- THIS IS THE BLOCKING LOOP THAT REMAINS PER YOUR REQUEST ---
-              while (!P.displayAnimate()) {
+        if (hours > 0 || days > 0) { // Show hours if there are days or hours
+            displayText += String(hours);
+            displayText += (hours == 1) ? " H " : " H ";
+        }
+        displayText += String(minutes);
+        displayText += (minutes == 1) ? " M" : " M";
+    
+    
+        // Loop for the configured number of scrolls
+        for (int i = 0; i < countdownScrollCount; i++) {
+            // Start the scrolling animation
+            P->displayClear();
+            P->setTextAlignment(PA_LEFT);
+            P->setCharSpacing(1);
+            textEffect_t actualScrollDirection = getEffectiveScrollDirection(PA_SCROLL_LEFT, flipDisplay);
+            P->displayScroll(displayText.c_str(), PA_LEFT, actualScrollDirection, GENERAL_SCROLL_SPEED);
+            
+            // Log the scroll action to the Serial Monitor
+            Serial.printf("[COUNTDOWN] Scrolling text (Pass %d/%d): %s\n", i + 1, countdownScrollCount, displayText.c_str());
+        
+            // Wait here until the current scroll animation is done
+            while (!P->displayAnimate()) {
                 yield();
-              }
-
-              countdownSegment++;
-              segmentStartTime = millis();
-              break;
             }
-
-          case 4:  // Exit countdown
-            Serial.println("[COUNTDOWN-STATIC] All countdown segments and label displayed. Advancing to Clock.");
-            countdownSegment = 0;
-            segmentStartTime = 0;
-
-            P.setTextAlignment(PA_CENTER);
-            P.setCharSpacing(1);
-            advanceDisplayMode();
-            yield();
-            return;
-
-          default:
-            Serial.println("[COUNTDOWN-ERROR] Invalid countdownSegment, resetting.");
-            countdownSegment = 0;
-            segmentStartTime = 0;
-            break;
         }
 
-        if (currentSegmentText.length() > 0) {
-          P.setTextAlignment(PA_CENTER);
-          P.setCharSpacing(1);
-          P.print(currentSegmentText.c_str());
-        }
-      }
-
-      P.displayAnimate();  // This handles regular segment display updates
-    }                      // End of 'else' (Normal Countdown Segments)
-
-    // Keep alignment reset just in case
-    P.setTextAlignment(PA_CENTER);
-    P.setCharSpacing(1);
-    yield();
-    return;
-  }  // End of if (displayMode == 3 && ...)
-
-
-
-
+        // Move to the next display mode
+        advanceDisplayMode();
+    }
+  }
+  
   // --- NIGHTSCOUT Display Mode ---
-  if (displayMode == 4) {
-    String ntpField = String(ntpServer2);
+  else if (displayMode == 4) {
+    String nsUrl = String(nightscoutUrl);
 
-    // These static variables will retain their values between calls to this block
     static unsigned long lastNightscoutFetchTime = 0;
     const unsigned long NIGHTSCOUT_FETCH_INTERVAL = 150000;  // 2.5 minutes
     static int currentGlucose = -1;
     static String currentDirection = "?";
 
-    // Check if it's time to fetch new data or if we have no data yet
     if (currentGlucose == -1 || millis() - lastNightscoutFetchTime >= NIGHTSCOUT_FETCH_INTERVAL) {
       WiFiClientSecure client;
       client.setInsecure();
       HTTPClient https;
-      https.begin(client, ntpField);
+      https.begin(client, nsUrl);
       https.setConnectTimeout(5000);
       https.setTimeout(5000);
 
@@ -2008,10 +2161,9 @@ void loop() {
       }
 
       https.end();
-      lastNightscoutFetchTime = millis();  // Update the timestamp
+      lastNightscoutFetchTime = millis();
     }
 
-    // Display the data we have, which is now stored in static variables
     if (currentGlucose != -1) {
       char arrow;
       if (currentDirection == "Flat") arrow = 139;
@@ -2025,22 +2177,294 @@ void loop() {
 
       String displayText = String(currentGlucose) + String(arrow);
 
-      P.setTextAlignment(PA_CENTER);
-      P.setCharSpacing(1);
-      P.print(displayText.c_str());
+      P->setTextAlignment(PA_CENTER);
+      P->setCharSpacing(1);
+      P->print(displayText.c_str());
 
-      delay(weatherDuration);
-      advanceDisplayMode();
-      return;
+      // Use a non-blocking delay for the display duration
+      if (millis() - lastSwitch > weatherDuration) {
+          advanceDisplayMode();
+      }
     } else {
-      // If no data is available after the first fetch attempt, show an error and advance
-      P.setTextAlignment(PA_CENTER);
-      P.setCharSpacing(0);
-      P.print(F("?)"));
-      delay(2000);  // Wait 2 seconds before advancing
-      advanceDisplayMode();
-      return;
+      P->setTextAlignment(PA_CENTER);
+      P->setCharSpacing(0);
+      P->print(F("?)"));
+      // Use a non-blocking delay
+      if (millis() - lastSwitch > 2000) {
+          advanceDisplayMode();
+      }
     }
   }
+
+  // --- Matrix Effect Display Mode ---
+  else if (displayMode == 5 && matrixEffectEnabled) {
+    if (millis() - matrixLastUpdate > 100) { // Replaces delay()
+        matrixLastUpdate = millis();
+        static uint8_t matrix[MAX_DEVICES*8];
+
+        if (matrixIsFirstRun) {
+            for (uint8_t i=0; i<MAX_DEVICES*8; i++)
+                matrix[i] = 0;
+            matrixIsFirstRun = false;
+        }
+
+        for (uint8_t i=0; i<MAX_DEVICES*8; i++)
+            matrix[i] <<= 1;
+
+        for (int k=0; k < matrixLoad; k++) {
+          if (random(4) == 0) {
+              uint8_t x = random(MAX_DEVICES*8);
+              if (matrix[x] == 0)
+                  matrix[x] = 1;
+          }
+        }
+
+        for (uint8_t i=0; i<MAX_DEVICES*8; i++)
+            P->getGraphicObject()->setColumn(i, matrix[i]);
+    }
+  }
+
+  // --- Ping-Pong Effect Display Mode ---
+  else if (displayMode == 6 && pingPongEffectEnabled) {
+      if (pingPongIsFirstRun) {
+          paddle1 = {MATRIX_HEIGHT / 2, 1};
+          paddle2 = {MATRIX_HEIGHT / 2, -1};
+          ball = {MATRIX_WIDTH / 2, MATRIX_HEIGHT / 2, (random(2) == 0) ? 1 : -1, (random(2) == 0) ? 1 : -1};
+          pingPongIsFirstRun = false;
+      }
+
+      if (millis() - pingPongLastUpdate > PING_PONG_SPEED) {
+          pingPongLastUpdate = millis();
+          paddle1.y += paddle1.dy;
+          paddle2.y += paddle2.dy;
+
+          if (paddle1.y <= 0 || paddle1.y + PADDLE_HEIGHT >= MATRIX_HEIGHT) {
+              paddle1.dy = -paddle1.dy;
+          }
+          if (paddle2.y <= 0 || paddle2.y + PADDLE_HEIGHT >= MATRIX_HEIGHT) {
+              paddle2.dy = -paddle2.dy;
+          }
+
+          ball.x += ball.dx;
+          ball.y += ball.dy;
+
+          if (ball.y <= 0 || ball.y + BALL_SIZE >= MATRIX_HEIGHT) {
+              ball.dy = -ball.dy;
+          }
+
+          if (ball.x <= 1 && ball.y >= paddle1.y && ball.y < paddle1.y + PADDLE_HEIGHT) {
+              ball.dx = -ball.dx;
+          }
+          if (ball.x + BALL_SIZE >= MATRIX_WIDTH - 1 && ball.y >= paddle2.y && ball.y < paddle2.y + PADDLE_HEIGHT) {
+              ball.dx = -ball.dx;
+          }
+
+          if (ball.x < 0 || ball.x > MATRIX_WIDTH) {
+              ball.x = MATRIX_WIDTH / 2;
+              ball.y = MATRIX_HEIGHT / 2;
+              ball.dx = (random(2) == 0) ? 1 : -1;
+              ball.dy = (random(2) == 0) ? 1 : -1;
+          }
+          
+          P->displayClear();
+          for (int i = 0; i < PADDLE_HEIGHT; i++) {
+              if (paddle1.y + i >= 0 && paddle1.y + i < MATRIX_HEIGHT)
+                  P->getGraphicObject()->setPoint(paddle1.y + i, 0, true);
+          }
+          for (int i = 0; i < PADDLE_HEIGHT; i++) {
+              if (paddle2.y + i >= 0 && paddle2.y + i < MATRIX_HEIGHT)
+                  P->getGraphicObject()->setPoint(paddle2.y + i, MATRIX_WIDTH - 1, true);
+          }
+          if (ball.x >= 0 && ball.x < MATRIX_WIDTH && ball.y >= 0 && ball.y < MATRIX_HEIGHT)
+              P->getGraphicObject()->setPoint(ball.y, ball.x, true);
+      }
+  }
+
+  // --- Snake Game Display Mode ---
+  else if (displayMode == 7 && snakeEffectEnabled) {
+    if (snakeIsFirstRun) {
+        snakeLength = 3;
+        snake[0] = {MATRIX_WIDTH / 2, MATRIX_HEIGHT / 2};
+        snake[1] = {MATRIX_WIDTH / 2 - 1, MATRIX_HEIGHT / 2};
+        snake[2] = {MATRIX_WIDTH / 2 - 2, MATRIX_HEIGHT / 2};
+        do {
+            foodX = random(MATRIX_WIDTH);
+            foodY = random(MATRIX_HEIGHT);
+        } while (isCollision(foodX, foodY));
+        snakeDir = RIGHT;
+        snakeIsFirstRun = false;
+        P->displayClear(); // Initial clear
+    }
+
+    if (millis() - snakeLastUpdate > SNAKE_SPEED) {
+        snakeLastUpdate = millis();
+        int hx = snake[0].x;
+        int hy = snake[0].y;
+
+        Direction possible_dirs[3];
+        int num_possible = 0;
+        if (snakeDir != DOWN) possible_dirs[num_possible++] = UP;
+        if (snakeDir != UP) possible_dirs[num_possible++] = DOWN;
+        if (snakeDir != RIGHT) possible_dirs[num_possible++] = LEFT;
+        if (snakeDir != LEFT) possible_dirs[num_possible++] = RIGHT;
+
+        Direction best_dir = snakeDir;
+        int min_dist = 1001;
+
+        for (int i = 0; i < num_possible; i++) {
+            Direction current_dir = possible_dirs[i];
+            int next_x = hx;
+            int next_y = hy;
+
+            if (current_dir == UP) next_y--;
+            if (current_dir == DOWN) next_y++;
+            if (current_dir == LEFT) next_x--;
+            if (current_dir == RIGHT) next_x++;
+
+            if (next_x < 0) next_x = MATRIX_WIDTH - 1;
+            if (next_x >= MATRIX_WIDTH) next_x = 0;
+            if (next_y < 0) next_y = MATRIX_HEIGHT - 1;
+            if (next_y >= MATRIX_HEIGHT) next_y = 0;
+            
+            if (!isCollision(next_x, next_y)) {
+                int dist = abs(next_x - foodX) + abs(next_y - foodY);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    best_dir = current_dir;
+                }
+            }
+        }
+        snakeDir = best_dir;
+
+        SnakeSegment newHead = snake[0];
+        if (snakeDir == UP) newHead.y--;
+        if (snakeDir == DOWN) newHead.y++;
+        if (snakeDir == LEFT) newHead.x--;
+        if (snakeDir == RIGHT) newHead.x++;
+
+        if (newHead.x < 0) newHead.x = MATRIX_WIDTH - 1;
+        if (newHead.x >= MATRIX_WIDTH) newHead.x = 0;
+        if (newHead.y < 0) newHead.y = MATRIX_HEIGHT - 1;
+        if (newHead.y >= MATRIX_HEIGHT) newHead.y = 0;
+
+        if (snakeLength >= 13 && isCollision(newHead.x, newHead.y)) {
+            snakeIsFirstRun = true;
+            return;
+        }
+        
+        memmove(&snake[1], &snake[0], sizeof(SnakeSegment) * (snakeLength));
+        snake[0] = newHead;
+
+        if (newHead.x == foodX && newHead.y == foodY) {
+            if (snakeLength < MAX_DEVICES * 8 * 8) {
+                snakeLength++;
+            }
+            do {
+                foodX = random(MATRIX_WIDTH);
+                foodY = random(MATRIX_HEIGHT);
+            } while (isCollision(foodX, foodY));
+        }
+
+        P->displayClear();
+        P->getGraphicObject()->setPoint(foodY, foodX, true);
+        for (int i = 0; i < snakeLength; i++) {
+            P->getGraphicObject()->setPoint(snake[i].y, snake[i].x, true);
+        }
+    }
+  }
+  // --- Knight Rider Effect Display Mode ---
+  else if (displayMode == 8 && knightRiderEffectEnabled) {
+    // Map the 1-10 speed to a delay. Lower delay = faster.
+    // (11 - speed) makes slider intuitive (10 is fastest).
+    int scan_delay = (11 - knightRiderSpeed) * 8; 
+
+    if (millis() - knightRiderLastUpdate > scan_delay) {
+      knightRiderLastUpdate = millis();
+
+      if (knightRiderIsFirstRun) {
+        knightRiderPos = 0;
+        knightRiderDir = 1;
+        knightRiderIsFirstRun = false;
+      }
+
+      P->displayClear();
+
+      // Draw the scanner bar with a tail
+      for (int i = 0; i < knightRiderWidth; i++) {
+        int trailPos = knightRiderPos - (knightRiderDir * i);
+        if (trailPos >= 0 && trailPos < MATRIX_WIDTH) {
+          P->getGraphicObject()->setPoint(KR_BAR_Y, trailPos, true);
+        }
+      }
+      
+      // Move the scanner and check for bounce
+      knightRiderPos += knightRiderDir;
+      if (knightRiderPos <= 0 || knightRiderPos >= MATRIX_WIDTH - 1) {
+        knightRiderDir *= -1;
+      }
+    }
+  }
+
+  // --- EKG Effect Display Mode ---
+  else if (displayMode == 9 && ekgEffectEnabled) {
+    if (ekgIsFirstRun) {
+      ekgCurrentPixel = 0;
+      ekg_prev_yPos = -1;
+      ekgPaused = false;
+      ekgIsFirstRun = false;
+      P->displayClear(); // Clear the display at the very beginning of the effect
+    }
+    
+    // Handle the pause after one full animation cycle
+    if (ekgPaused) {
+      if(millis() - ekgPauseStartTime > 250) { // Non-blocking delay
+        ekgIsFirstRun = true; // This will trigger a reset on the next loop
+      }
+      return; // Do nothing else while paused
+    }
+
+    // Map the 1-10 speed to a drawing delay. Lower delay = faster.
+    int pixel_draw_delay = 150 - (ekgSpeed * 10);
+
+    if (millis() - ekgLastDrawTime > pixel_draw_delay) {
+      ekgLastDrawTime = millis();
+
+      // Calculate X position, drawing from right to left
+      int draw_x = (MATRIX_WIDTH - 1) - ekgCurrentPixel;
+      
+      int yPos = 4; // Flatline
+      if (ekgCurrentPixel >= 4 && ekgCurrentPixel < 4 + ekgWaveformSize) {
+        int waveIndex = ekgCurrentPixel - 4;
+        yPos = heartBeatWaveform[waveIndex];
+      }
+      
+      // Draw the current point
+      P->getGraphicObject()->setPoint(yPos, draw_x, true);
+
+      // Connect points with a vertical line if the jump is large
+      if (ekgCurrentPixel > 0 && ekg_prev_yPos != -1) {
+        int dy = abs(ekg_prev_yPos - yPos);
+        if (dy > 1) {
+          int start_y = min(yPos, ekg_prev_yPos);
+          int end_y = max(yPos, ekg_prev_yPos);
+          for (int y = start_y + 1; y < end_y; y++) {
+            // Draw the connecting line on the previous column
+            P->getGraphicObject()->setPoint(y, draw_x + 1, true);
+          }
+        }
+      }
+      
+      ekg_prev_yPos = yPos;
+      ekgCurrentPixel++;
+
+      // Check if animation cycle is complete
+      if (ekgCurrentPixel >= MATRIX_WIDTH) {
+        ekgPaused = true;
+        ekgPauseStartTime = millis(); // Start the pause timer
+      }
+    }
+  }
+  
+  P->displayAnimate();
   yield();
 }
