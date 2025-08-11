@@ -23,6 +23,11 @@ env:
   ADDR_FIRMWARE: "0x10000"
   ADDR_LITTLEFS: "0x210000"
 
+  # WARNING: This is the size in bytes for the LittleFS partition.
+  # The value 1572864 (1.5MB) is a common default. This may need to be adjusted
+  # based on your board's specific partition scheme.
+  LITTLEFS_PARTITION_SIZE: 1572864
+
 # A workflow is made up of one or more jobs.
 jobs:
   build:
@@ -58,15 +63,12 @@ jobs:
           arduino-cli compile --fqbn ${{ env.BOARD_FQBN }} --output-dir build_output ./${{ env.SKETCH_FOLDER }}
 
       # ---
-      # REPLACED STEP: Build the LittleFS Filesystem Image
+      # REPLACED STEP: Build the LittleFS Filesystem Image Manually
       # ---
       - name: Build LittleFS Filesystem Image
-        uses: jmartisk/arduino-spiffs-littlefs-builder@v1
-        with:
-          data: 'data'
-          type: 'littlefs'
-          output: 'littlefs.bin'
-
+        run: |
+          mklittlefs -c data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
+      
       - name: Rename Firmware File for Clarity
         run: mv build_output/${{ env.SKETCH_FOLDER }}.bin build_output/firmware.bin
 
