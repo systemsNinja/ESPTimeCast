@@ -55,8 +55,8 @@ jobs:
 
       - name: Build LittleFS Filesystem Image
         run: |
-          # Find the mklittlefs tool path dynamically within the installed packages
-          MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -name "mklittlefs" | head -n 1)
+          # Find the mklittlefs tool path dynamically, ensuring it's a file
+          MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -type f -name "mklittlefs" | head -n 1)
           # Run the tool using its full path
           $MK_TOOL_PATH -c data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
