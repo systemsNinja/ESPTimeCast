@@ -10,13 +10,8 @@ on:
 
 # Environment variables for easy configuration.
 env:
-  # The folder name for your sketch. MUST NOT contain the .ino extension.
   SKETCH_FOLDER: ESPTimeCast_ESP32
-  
-  # FQBN for your Adafruit board.
   BOARD_FQBN: esp32:esp32:adafruit_feather_esp32s3
-  
-  # Configuration for merged binary
   ESP_CHIP_TYPE: esp32s3
   ADDR_BOOTLOADER: "0x1000"
   ADDR_PARTITIONS: "0x8000"
@@ -27,10 +22,7 @@ env:
 # A workflow is made up of one or more jobs.
 jobs:
   build:
-    # The type of virtual machine to run the job on.
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -55,10 +47,10 @@ jobs:
 
       - name: Build LittleFS Filesystem Image
         run: |
-          # Find the mklittlefs tool path dynamically, ensuring it's a file
+          # Find the mklittlefs tool path dynamically
           MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -type f -name "mklittlefs" | head -n 1)
-          # Run the tool using its full path
-          $MK_TOOL_PATH -c data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
+          # Run the tool using the correct path to the data folder
+          $MK_TOOL_PATH -c ${{ env.SKETCH_FOLDER }}/data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
       - name: Rename Firmware File for Clarity
         run: mv build_output/${{ env.SKETCH_FOLDER }}.bin build_output/firmware.bin
