@@ -12,7 +12,7 @@ on:
 env:
   SKETCH_FOLDER: ESPTimeCast_ESP32
   # UPDATED for LILYGO T-Display
-  BOARD_FQBN: esp32:esp32:esp32:esp32
+  BOARD_FQBN: esp32:esp32:esp32
   # UPDATED for LILYGO T-Display's chip
   ESP_CHIP_TYPE: esp32
   ADDR_BOOTLOADER: "0x1000"
