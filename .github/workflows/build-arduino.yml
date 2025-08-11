@@ -47,11 +47,15 @@ jobs:
 
       - name: Build LittleFS Filesystem Image
         run: |
-          # Find the mklittlefs tool path dynamically
           MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -type f -name "mklittlefs" | head -n 1)
-          # Run the tool using the correct path to the data folder
           $MK_TOOL_PATH -c ${{ env.SKETCH_FOLDER }}/data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
+      # ---
+      # ADD THIS NEW STEP TO DEBUG
+      # ---
+      - name: List Build Output Files
+        run: ls -l build_output/
+
       - name: Rename Firmware File for Clarity
         run: mv build_output/${{ env.SKETCH_FOLDER }}.bin build_output/firmware.bin
 

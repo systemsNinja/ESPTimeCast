@@ -5,7 +5,7 @@
   "openWeatherCity": "",
   "openWeatherCountry": "",
   "clockDuration": 10000,
-  "weatherDuration": 5000,
+  "weatherDuration": 5000,e:\Personal\ESPTimeCast Project\ESPTimeCast\ESPTimeCast_ESP32\data\index.html
   "timeZone": "America/New_York",
   "weatherUnits": "metric",
   "brightness": 10,
