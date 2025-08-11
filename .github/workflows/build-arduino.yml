@@ -1,17 +1,9 @@
 # Name of the GitHub Actions workflow.
 name: Build and Merge Firmware
 
-# ---
-# TRIGGERS
-# ---
-# This workflow now runs on:
-# 1. A push to the 'main' branch.
-# 2. When a new Release is created.
-# 3. When run manually from the Actions tab.
+# This workflow is triggered automatically when a new Release is created
+# or can be run manually from the Actions tab.
 on:
-  push:
-    branches:
-      - main
   release:
     types: [created]
   workflow_dispatch:
@@ -19,7 +11,10 @@ on:
 # Environment variables for easy configuration.
 env:
   SKETCH_FOLDER: ESPTimeCast_ESP32
-  BOARD_FQBN: esp32:esp32:sparklemotionmini
+  
+  # DEFINITIVE FIX #1: The FQBN must specify the 'adafruit' vendor.
+  BOARD_FQBN: adafruit:esp32:sparklemotionmini
+  
   ESP_CHIP_TYPE: esp32s3
   ADDR_BOOTLOADER: "0x1000"
   ADDR_PARTITIONS: "0x8000"
@@ -49,8 +44,8 @@ jobs:
           arduino-cli lib install "ESPAsyncWebServer"
 
       - name: Install ESP32 Platform
-        # UPDATED: Added Adafruit's URL so the CLI can find custom boards
-        run: arduino-cli core install esp32:esp32@2.0.17 --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+        # DEFINITIVE FIX #2: Install the 'adafruit:esp32' package, not the generic 'esp32:esp32'.
+        run: arduino-cli core install adafruit:esp32@2.0.9 --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
 
       - name: Compile Sketch
         run: |
@@ -58,7 +53,7 @@ jobs:
 
       - name: Build LittleFS Filesystem Image
         run: |
-          MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -type f -name "mklittlefs" | head -n 1)
+          MK_TOOL_PATH=$(find ~/.arduino15/packages/adafruit/tools/mklittlefs_adafruit -name "mklittlefs" | head -n 1)
           $MK_TOOL_PATH -c ${{ env.SKETCH_FOLDER }}/data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
       - name: Rename Firmware File for Clarity
@@ -88,10 +83,3 @@ jobs:
           asset_path: ./merged-firmware.bin
           asset_name: merged-firmware.bin
           asset_content_type: application/octet-stream
-      
-      - name: Upload Build Artifact
-        if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
-        with:
-          name: merged-firmware
-          path: ./merged-firmware.bin
