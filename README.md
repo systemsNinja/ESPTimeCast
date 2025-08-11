@@ -4,7 +4,7 @@
 ![GitHub forks](https://img.shields.io/github/forks/systemsNinja/ESPTimeCast?style=social)
 ![Last Commit](https://img.shields.io/github/last-commit/systemsNinja/ESPTimeCast)
 
-**ESPTimeCast Advanced** is a WiFi-connected LED matrix display based on ESP32 and Max7219. It is forked from  [mfactory-osaka]((https://github.com/mfactory-osaka/ESPTimeCast) and upgraded with a few advanced features.  
+**ESPTimeCast Advanced** is a WiFi-connected LED matrix display based on ESP32 and Max7219. It is forked from  [mfactory-osaka](https://github.com/mfactory-osaka/ESPTimeCast) and upgraded with a few advanced features.  
 It displays the current time, day of the week, and local weather (temp/humidity/weather description) fetched from OpenWeatherMap, countdown timer, and effects display. Optionally you can also enable glucose + trend display (Nightscout-compatible). 
 Setup and configuration are fully managed via a built-in web interface.  
 
