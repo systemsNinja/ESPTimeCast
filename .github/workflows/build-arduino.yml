@@ -1,9 +1,17 @@
 # Name of the GitHub Actions workflow.
 name: Build and Merge Firmware
 
-# This workflow is triggered automatically when a new Release is created
-# or can be run manually from the Actions tab.
+# ---
+# TRIGGERS
+# ---
+# This workflow now runs on:
+# 1. A push to the 'main' branch.
+# 2. When a new Release is created.
+# 3. When run manually from the Actions tab.
 on:
+  push:
+    branches:
+      - main
   release:
     types: [created]
   workflow_dispatch:
@@ -22,10 +30,8 @@ env:
 # A workflow is made up of one or more jobs.
 jobs:
   build:
-    # Add this permissions block to grant write access to the token
     permissions:
       contents: write
-
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -81,3 +87,13 @@ jobs:
           asset_path: ./merged-firmware.bin
           asset_name: merged-firmware.bin
           asset_content_type: application/octet-stream
+      
+      # ---
+      # NEW STEP: Upload firmware as an artifact on push events
+      # ---
+      - name: Upload Build Artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-firmware
+          path: ./merged-firmware.bin
