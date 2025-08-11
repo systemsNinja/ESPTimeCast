@@ -11,9 +11,10 @@ on:
 
 env:
   SKETCH_FOLDER: ESPTimeCast_ESP32
-  # CORRECTION #1: FQBN must start with the platform name, 'esp32:esp32'
-  BOARD_FQBN: esp32:esp32:sparklemotionmini
-  ESP_CHIP_TYPE: esp32s3
+  # UPDATED for LILYGO T-Display
+  BOARD_FQBN: esp32:esp32:lilygo_t_display
+  # UPDATED for LILYGO T-Display's chip
+  ESP_CHIP_TYPE: esp32
   ADDR_BOOTLOADER: "0x1000"
   ADDR_PARTITIONS: "0x8000"
   ADDR_FIRMWARE: "0x10000"
@@ -41,10 +42,8 @@ jobs:
           arduino-cli lib install "ESPAsyncWebServer"
 
       - name: Install ESP32 Platform
-        # CORRECTION #2: Split into two steps for reliability
-        run: |
-          arduino-cli core update-index --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
-          arduino-cli core install esp32:esp32@2.0.17
+        # SIMPLIFIED: No need for Adafruit URL for a LILYGO board
+        run: arduino-cli core install esp32:esp32@2.0.17
 
       - name: Compile Sketch
         run: |
@@ -52,7 +51,6 @@ jobs:
 
       - name: Build LittleFS Filesystem Image
         run: |
-          # CORRECTION #3: Corrected the find path back to the 'esp32' package
           MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -type f -name "mklittlefs" | head -n 1)
           $MK_TOOL_PATH -c ${{ env.SKETCH_FOLDER }}/data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
