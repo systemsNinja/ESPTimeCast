@@ -22,10 +22,6 @@ env:
   ADDR_PARTITIONS: "0x8000"
   ADDR_FIRMWARE: "0x10000"
   ADDR_LITTLEFS: "0x210000"
-
-  # WARNING: This is the size in bytes for the LittleFS partition.
-  # The value 1572864 (1.5MB) is a common default. This may need to be adjusted
-  # based on your board's specific partition scheme.
   LITTLEFS_PARTITION_SIZE: 1572864
 
 # A workflow is made up of one or more jobs.
@@ -53,18 +49,10 @@ jobs:
       - name: Install ESP32 Platform
         run: arduino-cli core install esp32:esp32
 
-      - name: Move sketch to required folder structure
-        run: |
-          mkdir -p ${{ env.SKETCH_FOLDER }}
-          mv ${{ env.SKETCH_FOLDER }}.ino ./${{ env.SKETCH_FOLDER }}/
-
       - name: Compile Sketch
         run: |
           arduino-cli compile --fqbn ${{ env.BOARD_FQBN }} --output-dir build_output ./${{ env.SKETCH_FOLDER }}
 
-      # ---
-      # REPLACED STEP: Build the LittleFS Filesystem Image Manually
-      # ---
       - name: Build LittleFS Filesystem Image
         run: |
           mklittlefs -c data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
