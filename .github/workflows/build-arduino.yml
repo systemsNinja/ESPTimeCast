@@ -19,7 +19,7 @@ on:
 # Environment variables for easy configuration.
 env:
   SKETCH_FOLDER: ESPTimeCast_ESP32
-  BOARD_FQBN: esp32:esp32:adafruit_feather_esp32s3
+  BOARD_FQBN: esp32:esp32:sparklemotionmini
   ESP_CHIP_TYPE: esp32s3
   ADDR_BOOTLOADER: "0x1000"
   ADDR_PARTITIONS: "0x8000"
