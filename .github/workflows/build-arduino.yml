@@ -1,5 +1,5 @@
 # Name of the GitHub Actions workflow.
-name: Build Arduino Firmware
+name: Build and Merge Firmware
 
 # This workflow is triggered automatically when a new Release is created
 # or can be run manually from the Actions tab.
@@ -10,14 +10,25 @@ on:
 
 # Environment variables for easy configuration.
 env:
-  # Your sketch name
-  SKETCH_NAME: ESPTimeCast_ESP32.ino
-  
-  # FQBN for the Adafruit ESP32-S3 Feather.
-  # NOTE: This is an educated guess. If your board is different (like a QT Py or another model),
-  # you will need to find the exact FQBN for it. This is a common point of failure.
-  # You can often find this in the board's documentation or by running 'arduino-cli board listall'.
+  # The folder name for your sketch. MUST NOT contain the .ino extension.
+  SKETCH_FOLDER: ESPTimeCast_ESP32
+
+  # FQBN for your Adafruit board.
   BOARD_FQBN: esp32:esp32:adafruit_feather_esp32s3
+  
+  # ---
+  # CONFIGURATION FOR MERGED BINARY
+  # ---
+  # The chip type for esptool.py. Common values: esp32, esp32s2, esp32s3, esp32c3
+  ESP_CHIP_TYPE: esp32s3
+  
+  # Memory addresses for the different parts of the firmware.
+  # WARNING: The ADDR_LITTLEFS depends on your board's partition scheme.
+  # This default '0x210000' is common, but may need to be changed if your app doesn't work.
+  ADDR_BOOTLOADER: "0x1000"
+  ADDR_PARTITIONS: "0x8000"
+  ADDR_FIRMWARE: "0x10000"
+  ADDR_LITTLEFS: "0x210000"
 
 # A workflow is made up of one or more jobs.
 jobs:
@@ -27,21 +38,12 @@ jobs:
 
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-      # ---
-      # STEP 1: Check out your repository's code
-      # ---
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ---
-      # STEP 2: Set up the Arduino CLI environment
-      # ---
       - name: Setup Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      # ---
-      # STEP 3: Install required libraries
-      # ---
       - name: Install Libraries
         run: |
           arduino-cli lib install "ArduinoJson"
@@ -49,35 +51,55 @@ jobs:
           arduino-cli lib install "MD_MAX72xx"
           arduino-cli lib install "AsyncTCP"
           arduino-cli lib install "ESPAsyncWebServer"
-          # Note: Core libraries like WiFi, HTTPClient, SPI, etc., are included with the board package.
 
-      # ---
-      # STEP 4: Install the ESP32 board package
-      # ---
       - name: Install ESP32 Platform
         run: arduino-cli core install esp32:esp32
 
-      # ---
-      # STEP 5: Compile the Arduino sketch
-      # ---
+      - name: Move sketch to required folder structure
+        run: |
+          mkdir -p ${{ env.SKETCH_FOLDER }}
+          mv ${{ env.SKETCH_FOLDER }}.ino ./${{ env.SKETCH_FOLDER }}/
+
       - name: Compile Sketch
         run: |
-          arduino-cli compile --fqbn ${{ env.BOARD_FQBN }} --output-dir build_output ${{ env.SKETCH_NAME }}
+          arduino-cli compile --fqbn ${{ env.BOARD_FQBN }} --output-dir build_output ./${{ env.SKETCH_FOLDER }}
+
+      - name: Build LittleFS Filesystem Image
+        uses: lorol/arduino-esp32fs-action@v5.1
+        with:
+          data_dir: data
+          output_image: littlefs.bin
+
+      - name: Rename Firmware File for Clarity
+        run: mv build_output/${{ env.SKETCH_FOLDER }}.bin build_output/firmware.bin
 
       # ---
-      # STEP 6: Rename the .bin file for consistency
+      # NEW STEPS FOR MERGING
       # ---
-      - name: Rename Firmware File
-        run: mv build_output/${{ env.SKETCH_NAME }}.bin build_output/firmware.bin
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install esptool
+        run: pip install esptool
+
+      - name: Merge Binaries
+        run: |
+          esptool.py --chip ${{ env.ESP_CHIP_TYPE }} merge_bin -o merged-firmware.bin \
+          ${{ env.ADDR_BOOTLOADER }} build_output/bootloader.bin \
+          ${{ env.ADDR_PARTITIONS }} build_output/partitions.bin \
+          ${{ env.ADDR_FIRMWARE }} build_output/firmware.bin \
+          ${{ env.ADDR_LITTLEFS }} littlefs.bin
 
       # ---
-      # STEP 7: Upload the compiled .bin file to the Release
+      # FINAL UPLOAD STEP
       # ---
-      - name: Upload Firmware to Release
+      - name: Upload Merged Firmware to Release
         if: github.event_name == 'release'
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./build_output/firmware.bin
-          asset_name: firmware.bin
+          asset_path: ./merged-firmware.bin
+          asset_name: merged-firmware.bin
           asset_content_type: application/octet-stream
