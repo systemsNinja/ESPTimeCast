@@ -19,7 +19,8 @@ on:
 # Environment variables for easy configuration.
 env:
   SKETCH_FOLDER: ESPTimeCast_ESP32
-  BOARD_FQBN: esp32:esp32:sparklemotionmini
+  # CORRECTION #1: The FQBN must start with 'adafruit:'
+  BOARD_FQBN: adafruit:esp32:sparklemotionmini
   ESP_CHIP_TYPE: esp32s3
   ADDR_BOOTLOADER: "0x1000"
   ADDR_PARTITIONS: "0x8000"
@@ -49,8 +50,8 @@ jobs:
           arduino-cli lib install "ESPAsyncWebServer"
 
       - name: Install ESP32 Platform
-        # DEFINITIVE FIX #2: Install the 'adafruit:esp32' package, not the generic 'esp32:esp32'.
-        run: arduino-cli core install adafruit:esp32@2.0.9 --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+        # CORRECTION #2: Install the 'adafruit:esp32' package, not the generic 'esp32:esp32'.
+        run: arduino-cli core install adafruit:esp32 --additional-urls https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
 
       - name: Compile Sketch
         run: |
@@ -58,7 +59,8 @@ jobs:
 
       - name: Build LittleFS Filesystem Image
         run: |
-          MK_TOOL_PATH=$(find ~/.arduino15/packages/esp32/tools/mklittlefs -type f -name "mklittlefs" | head -n 1)
+          # CORRECTION #3: The path for the tool is now inside the 'adafruit' package folder.
+          MK_TOOL_PATH=$(find ~/.arduino15/packages/adafruit/tools/mklittlefs_adafruit -type f -name "mklittlefs" | head -n 1)
           $MK_TOOL_PATH -c ${{ env.SKETCH_FOLDER }}/data -b 4096 -p 256 -s ${{ env.LITTLEFS_PARTITION_SIZE }} littlefs.bin
       
       - name: Rename Firmware File for Clarity
