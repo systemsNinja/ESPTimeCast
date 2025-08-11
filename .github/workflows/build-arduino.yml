@@ -12,19 +12,12 @@ on:
 env:
   # The folder name for your sketch. MUST NOT contain the .ino extension.
   SKETCH_FOLDER: ESPTimeCast_ESP32
-
+  
   # FQBN for your Adafruit board.
   BOARD_FQBN: esp32:esp32:adafruit_feather_esp32s3
   
-  # ---
-  # CONFIGURATION FOR MERGED BINARY
-  # ---
-  # The chip type for esptool.py. Common values: esp32, esp32s2, esp32s3, esp32c3
+  # Configuration for merged binary
   ESP_CHIP_TYPE: esp32s3
-  
-  # Memory addresses for the different parts of the firmware.
-  # WARNING: The ADDR_LITTLEFS depends on your board's partition scheme.
-  # This default '0x210000' is common, but may need to be changed if your app doesn't work.
   ADDR_BOOTLOADER: "0x1000"
   ADDR_PARTITIONS: "0x8000"
   ADDR_FIRMWARE: "0x10000"
@@ -64,18 +57,19 @@ jobs:
         run: |
           arduino-cli compile --fqbn ${{ env.BOARD_FQBN }} --output-dir build_output ./${{ env.SKETCH_FOLDER }}
 
+      # ---
+      # REPLACED STEP: Build the LittleFS Filesystem Image
+      # ---
       - name: Build LittleFS Filesystem Image
-        uses: lorol/arduino-esp32fs-action@v5.1
+        uses: jmartisk/arduino-spiffs-littlefs-builder@v1
         with:
-          data_dir: data
-          output_image: littlefs.bin
+          data: 'data'
+          type: 'littlefs'
+          output: 'littlefs.bin'
 
       - name: Rename Firmware File for Clarity
         run: mv build_output/${{ env.SKETCH_FOLDER }}.bin build_output/firmware.bin
 
-      # ---
-      # NEW STEPS FOR MERGING
-      # ---
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -92,9 +86,6 @@ jobs:
           ${{ env.ADDR_FIRMWARE }} build_output/firmware.bin \
           ${{ env.ADDR_LITTLEFS }} littlefs.bin
 
-      # ---
-      # FINAL UPLOAD STEP
-      # ---
       - name: Upload Merged Firmware to Release
         if: github.event_name == 'release'
         uses: actions/upload-release-asset@v1
